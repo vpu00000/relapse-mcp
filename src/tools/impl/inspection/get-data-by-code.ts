@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { describeResponse, sendAndWait } from "../../factory.js";
+import { describeResponse, sendAndWait, sourceWithThreadContext } from "../../factory.js";
 import { maxOutputCharsSchema, threadContextSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
@@ -33,7 +33,7 @@ export default function register(server: McpServer): void {
 
       return sendAndWait({
         type: "get-data-by-code",
-        data: { source: `setthreadidentity(${threadContext});${code}` },
+        data: { source: sourceWithThreadContext(code, threadContext) },
         timeoutMs: clampedTimeout,
         maxOutputChars,
         stampClient: true,

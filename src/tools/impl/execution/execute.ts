@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { sendFireAndForget } from "../../factory.js";
+import { sendFireAndForget, sourceWithThreadContext } from "../../factory.js";
 import { threadContextSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
@@ -23,7 +23,7 @@ export default function register(server: McpServer): void {
       console.error(`Executing code in thread ${threadContext}...`);
       return sendFireAndForget({
         type: "execute",
-        data: { source: `setthreadidentity(${threadContext})\n${code}` },
+        data: { source: sourceWithThreadContext(code, threadContext) },
         successMessage: `Code has been scheduled to be run in thread context ${threadContext}.`,
       });
     }

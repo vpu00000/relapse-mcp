@@ -84,6 +84,7 @@
     installStatusIcon: document.getElementById("installStatusIcon"),
     installStatusTitle: document.getElementById("installStatusTitle"),
     installStatusMessage: document.getElementById("installStatusMessage"),
+    installConsole: document.getElementById("installConsole"),
     closeInstallDialog: document.getElementById("closeInstallDialog"),
     doneInstallDialog: document.getElementById("doneInstallDialog"),
     installationSuccess: document.getElementById("installationSuccess"),
@@ -694,6 +695,12 @@
     const succeeded = status.status === "success";
     const failed = status.status === "error";
     const complete = succeeded || failed;
+    const details = Array.isArray(status.details) ? status.details : [];
+    const consoleText = details.length > 0 ? details.join("\n") : "Waiting for command output…";
+    if (elements.installConsole.textContent !== consoleText) {
+      elements.installConsole.textContent = consoleText;
+      elements.installConsole.scrollTop = elements.installConsole.scrollHeight;
+    }
     if (succeeded) {
       showInstallationSuccess(status);
       return;

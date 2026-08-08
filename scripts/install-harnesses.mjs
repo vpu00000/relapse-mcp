@@ -1879,6 +1879,8 @@ async function run(command, args, options = {}) {
     return;
   }
   const label = options.label || [command, ...args].join(" ");
+  const streamOutput = process.env.ROBLOX_MCP_INSTALLER_STREAM_OUTPUT === "1";
+  if (streamOutput) console.log(`$ ${[command, ...args.map(quote)].join(" ")}`);
   const spinner = startSpinner(label);
   let output = "";
   await new Promise((resolve, reject) => {
@@ -1900,9 +1902,11 @@ async function run(command, args, options = {}) {
     }
     child.stdout.on("data", (chunk) => {
       output += chunk.toString();
+      if (streamOutput) process.stdout.write(chunk);
     });
     child.stderr.on("data", (chunk) => {
       output += chunk.toString();
+      if (streamOutput) process.stderr.write(chunk);
     });
     child.on("error", (error) => {
       spinner.stop(false);
@@ -1914,7 +1918,7 @@ async function run(command, args, options = {}) {
         resolve();
       } else {
         spinner.stop(false);
-        const details = output.trim() ? `\n\n${output.trim()}` : "";
+        const details = !streamOutput && output.trim() ? `\n\n${output.trim()}` : "";
         reject(new Error(`${command} exited with code ${code}${details}`));
       }
     });

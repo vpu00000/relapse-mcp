@@ -206,6 +206,7 @@ test("web installer presents harness, skill, connector, background, and install 
   assert.match(html, /id="installDialog" hidden/);
   assert.match(html, /Installing Roblox MCP/);
   assert.match(html, /data-install-step="server"/);
+  assert.match(html, /id="installConsole"/);
   assert.match(html, /id="installationSuccess"/);
   assert.match(html, /Successfully installed!/);
   assert.match(html, /You can now close this page\./);
@@ -226,6 +227,7 @@ test("web installer presents harness, skill, connector, background, and install 
   assert.match(script, /method:\s*["']POST["']/);
   assert.match(script, /X-Roblox-MCP-Installer-Token/);
   assert.match(script, /pollInstallStatus/);
+  assert.match(script, /status\.details/);
   assert.match(script, /function showInstallationSuccess\(/);
   assert.match(script, /function launchSuccessConfetti\(/);
   assert.match(script, /harness\.manualRestartRequired/);
@@ -308,6 +310,7 @@ test("web installer completes a safe dry-run and exits after success", async (t)
   }
   assert.equal(status?.status, "success", status?.message);
   assert.equal(status?.step, "complete");
+  assert.ok(status?.details.some((line) => line.startsWith("$ ")));
   assert.doesNotMatch(status?.message || "", /restarting/i);
 
   const exitCode = await new Promise((resolve, reject) => {

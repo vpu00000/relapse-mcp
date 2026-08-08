@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -28,6 +29,7 @@ import {
   DEFAULT_DECOMPILER_RUNTIME_SETTINGS,
   normalizeDecompilerSettingsInput,
 } from "../dist/decompiler/settings.js";
+import { sourceWithThreadContext, toolTextResponse } from "../dist/tools/factory.js";
 import {
   semanticIndexReadyMessage,
   semanticPartialIndexWarning,
@@ -36,6 +38,28 @@ import {
 function identity(name) {
   return { clientId: name, placeId: 1, jobId: "job" };
 }
+
+test("thread-context source tolerates executors without identity helpers", () => {
+  assert.equal(
+    sourceWithThreadContext("return game.PlaceId", 8),
+    'local __setidentity = setthreadidentity or setidentity\nif type(__setidentity) == "function" then __setidentity(8) end\nreturn game.PlaceId'
+  );
+});
+
+test("oversized tool output is preserved in a private temporary artifact", async (t) => {
+  const fullOutput = `${"probe-value,".repeat(200)}\nfinal-value`;
+  const response = toolTextResponse(fullOutput, { maxOutputChars: 1000 });
+  const rendered = response.content[0].text;
+  const artifactPath = rendered.match(/Full output saved to: (.+)\n/)?.[1];
+
+  assert.ok(artifactPath, rendered);
+  t.after(() => fs.rm(artifactPath, { force: true }));
+  assert.equal(await fs.readFile(artifactPath, "utf8"), fullOutput);
+  assert.match(rendered, /Size: 2412 characters, 2 lines\. Expires in 1 hour\./);
+  if (process.platform !== "win32") {
+    assert.equal((await fs.stat(artifactPath)).mode & 0o077, 0);
+  }
+});
 
 test("mapping revisions ignore stale progress without dropping source payloads", () => {
   const id = identity("revision-ordering");

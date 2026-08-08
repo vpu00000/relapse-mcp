@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import fs from "fs";
 import { z } from "zod";
-import { sendFireAndForget, toolTextResponse } from "../../factory.js";
+import { sendFireAndForget, sourceWithThreadContext, toolTextResponse } from "../../factory.js";
 import { threadContextSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
@@ -28,7 +28,7 @@ export default function register(server: McpServer): void {
 
       return sendFireAndForget({
         type: "execute",
-        data: { source: `setthreadidentity(${threadContext})\n${code}` },
+        data: { source: sourceWithThreadContext(code, threadContext) },
         successMessage: `File executed: ${filePath} (thread context ${threadContext})`,
       });
     }

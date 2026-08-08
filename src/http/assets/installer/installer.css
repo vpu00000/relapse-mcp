@@ -857,7 +857,7 @@ button { color: inherit; }
   border-top: 1px solid var(--border);
 }
 .install-dialog {
-  width: min(520px, 100%);
+  width: min(620px, 100%);
 }
 .install-status {
   display: grid;
@@ -935,6 +935,19 @@ button { color: inherit; }
 .install-progress li.is-error > span {
   border-color: #ef6b73;
   background: #ef6b73;
+}
+.install-console {
+  height: 152px;
+  margin: 16px 20px 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--muted);
+  font: 11px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .install-dialog .dialog-actions {
   margin-top: 20px;

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -208,10 +208,11 @@ async function runInstallJob(request) {
   }
   if (dryRun) installerArgs.push("--dry-run");
 
-  const installOutput = await runProcess(process.execPath, installerArgs, {
+  appendInstallDetails(`$ ${[process.execPath, ...installerArgs].map((arg) => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(" ")}`);
+  await runProcess(process.execPath, installerArgs, {
     cwd: repoRoot,
+    onOutput: appendInstallDetails,
   });
-  appendInstallDetails(installOutput);
 
   if (request.installSkill && request.skillAgentIds.length > 0) {
     updateInstallState("skill", "Installing the Roblox MCP skill…");
@@ -268,17 +269,18 @@ async function runInstallJob(request) {
 
 function updateInstallState(step, message) {
   installState = { ...installState, step, message };
+  appendInstallDetails(message);
 }
 
 function appendInstallDetails(output) {
   const normalized = stripAnsi(output)
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-20);
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim())
+    .slice(-100);
   installState = {
     ...installState,
-    details: [...installState.details, ...normalized].slice(-40),
+    details: [...installState.details, ...normalized].slice(-200),
   };
 }
 
@@ -446,25 +448,44 @@ async function readHarnesses() {
 }
 
 async function runProcess(command, args, options = {}) {
-  try {
-    const { stdout, stderr } = await execFileAsync(command, args, {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const pending = { stdout: "", stderr: "" };
+    const child = spawn(command, args, {
       cwd: options.cwd || repoRoot,
-      env: { ...process.env, CI: "true" },
-      maxBuffer: 10 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CI: "true",
+        ROBLOX_MCP_INSTALLER_STREAM_OUTPUT: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
       shell: options.shell === true,
       windowsHide: true,
     });
-    return [stdout, stderr].filter(Boolean).join("\n");
-  } catch (error) {
-    const commandOutput = [
-      error?.stderr,
-      error?.stdout,
-    ].filter(Boolean).map(String).join("\n");
-    const details = stripAnsi(
-      commandOutput || error?.message || error
-    ).trim();
-    throw new Error(details || `${command} failed.`);
-  }
+    const collect = (stream, chunk) => {
+      const text = chunk.toString();
+      if (stream === "stdout") stdout += text;
+      else stderr += text;
+      const lines = (pending[stream] + text).split(/\r?\n/);
+      pending[stream] = lines.pop() || "";
+      if (lines.length > 0) options.onOutput?.(lines.join("\n"));
+    };
+    child.stdout.on("data", (chunk) => collect("stdout", chunk));
+    child.stderr.on("data", (chunk) => collect("stderr", chunk));
+    child.once("error", reject);
+    child.once("close", (code) => {
+      for (const stream of ["stdout", "stderr"]) {
+        if (pending[stream]) options.onOutput?.(pending[stream]);
+      }
+      if (code === 0) {
+        resolve([stdout, stderr].filter(Boolean).join("\n"));
+        return;
+      }
+      const details = stripAnsi([stderr, stdout].filter(Boolean).join("\n")).trim();
+      reject(new Error(details || `${command} exited with code ${code}.`));
+    });
+  });
 }
 
 async function readJsonBody(request) {
