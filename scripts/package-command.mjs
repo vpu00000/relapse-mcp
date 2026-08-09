@@ -9,6 +9,7 @@ const WINDOWS_NODE_CLI_PATHS = Object.freeze({
   ],
 });
 const WINDOWS_NATIVE_CLI_PATHS = Object.freeze({
+  claude: [["node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"]],
   code: [["..", "Code.exe"]],
 });
 
@@ -31,12 +32,12 @@ export function resolvePackageCommand(command, args, options = {}) {
     const executable = WINDOWS_NATIVE_CLI_PATHS[commandName]
       .map((parts) => path.win32.resolve(shimDirectory, ...parts))
       .find((candidate) => fileExists(candidate));
-    if (!executable) {
+    if (!executable && !Object.hasOwn(WINDOWS_NODE_CLI_PATHS, commandName)) {
       throw new Error(
         `Could not locate the ${commandName} executable behind ${command}. Reinstall ${commandName} and try again.`
       );
     }
-    return { command: executable, args: [...args], shell: false };
+    if (executable) return { command: executable, args: [...args], shell: false };
   }
 
   if (

@@ -818,6 +818,21 @@ test("dashboard update control starts and monitors the automatic updater", async
     }
   );
   const windowsClaudeShim = String.raw`C:\Users\Jordan\AppData\Roaming\npm\claude.cmd`;
+  const windowsClaudeExe = String.raw`C:\Users\Jordan\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`;
+  assert.deepEqual(
+    resolvePackageCommand(windowsClaudeShim, [
+      "mcp", "add", "roblox-mcp", "--scope", "user",
+    ], {
+      platform: "win32",
+      execPath: windowsNode,
+      fileExists: (filePath) => filePath === windowsClaudeExe,
+    }),
+    {
+      command: windowsClaudeExe,
+      args: ["mcp", "add", "roblox-mcp", "--scope", "user"],
+      shell: false,
+    }
+  );
   const windowsClaudeCli = String.raw`C:\Users\Jordan\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js`;
   assert.deepEqual(
     resolvePackageCommand(windowsClaudeShim, [
