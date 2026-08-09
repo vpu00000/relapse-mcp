@@ -137,6 +137,7 @@ const HARNESS_RESTART_SPECS = {
 
 const EXPLICIT_HARNESS_IDS = parseHarnessIds(getArgValue("--harnesses"));
 const LIST_HARNESSES_MODE = process.argv.includes("--list-harnesses-json");
+const SKIP_RUNNING_STATUS = process.argv.includes("--skip-running-status");
 const INSTALL_ONLY_MODE = process.argv.includes("--install-only");
 const RESTART_ONLY_MODE = process.argv.includes("--restart-harnesses-only");
 const JSON_RESULT_MODE = process.argv.includes("--json-result");
@@ -151,6 +152,7 @@ const ASCII_MODE = FORCE_ASCII_MODE || LEGACY_WINDOWS_CONSOLE || !terminalCanRen
 const PLAIN_MODE = process.argv.includes("--plain");
 const NO_OPENTUI = process.argv.includes("--no-opentui");
 let OPEN_TUI_DISABLED = false;
+let windowsProcessNames = null;
 const SHOW_ALL_HARNESSES = process.argv.includes("--show-all-harnesses") || process.argv.includes("--all-harnesses");
 const AUTOEXEC_TARGET_IDS = parseHarnessIds(getArgValue("--autoexec-targets"));
 const AUTOEXEC_MODE = process.argv.includes("--autoexec") || AUTOEXEC_TARGET_IDS.length > 0;
@@ -173,9 +175,9 @@ async function main() {
       const availability = HARNESS_AVAILABILITY.get(harness.id) || { detected: false, reason: "" };
       const restartSpec = HARNESS_RESTART_SPECS[harness.id];
       const manualRestartRequired =
-        harness.id === "codex" && interactiveCodexCliIsRunning();
+        !SKIP_RUNNING_STATUS && harness.id === "codex" && interactiveCodexCliIsRunning();
       const restartTarget =
-        restartSpec && !manualRestartRequired ? detectRestartTarget(restartSpec) : null;
+        !SKIP_RUNNING_STATUS && restartSpec && !manualRestartRequired ? detectRestartTarget(restartSpec) : null;
       return {
         id: harness.id,
         name: harness.name,
@@ -1690,13 +1692,20 @@ function interactiveCodexCliIsRunning() {
 }
 
 function windowsProcessIsRunning(name) {
-  const processName = name.replace(/\.exe$/i, "");
-  const script = `if (Get-Process -Name '${escapePowerShellSingleQuoted(processName)}' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
-    stdio: "ignore",
-    shell: false,
-  });
-  return result.status === 0;
+  const processName = windowsExeName(name).toLowerCase();
+  if (!windowsProcessNames) {
+    const result = spawnSync("tasklist.exe", ["/FO", "CSV", "/NH"], {
+      encoding: "utf8",
+      stdio: "pipe",
+      shell: false,
+    });
+    windowsProcessNames = new Set(
+      result.status === 0
+        ? result.stdout.split(/\r?\n/).map((line) => line.match(/^"([^"]+)"/)?.[1]?.toLowerCase()).filter(Boolean)
+        : []
+    );
+  }
+  return windowsProcessNames.has(processName);
 }
 
 function unixProcessIsRunning(name) {
@@ -1724,10 +1733,6 @@ function findOnPath(command) {
 
 function escapeAppleScript(value) {
   return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-function escapePowerShellSingleQuoted(value) {
-  return String(value).replace(/'/g, "''");
 }
 
 async function configureClaudeCode(serverEntry) {
@@ -3513,8 +3518,7 @@ function isGitRepository(dir) {
 }
 
 function commandExists(command) {
-  const probe = process.platform === "win32" ? "where" : "which";
-  return spawnSync(probe, [command], { stdio: "ignore", shell: false }).status === 0;
+  return Boolean(findOnPath(command));
 }
 
 function spawnCommand(command) {

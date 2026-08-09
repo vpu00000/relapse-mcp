@@ -142,8 +142,9 @@ function renderAddClientLoading() {
     addClientBody.innerHTML = '<div class="add-client-status">Loading setup options...</div>';
 }
 
-async function refreshClientSetupData() {
-    const res = await dashboardApiFetch('/api/client-setup');
+async function refreshClientSetupData(includeHarnesses = addClientMode === 'harness') {
+    const res = await dashboardApiFetch('/api/client-setup?includeHarnesses=' + (includeHarnesses ? '1' : '0') +
+        '&includeTailscale=' + (includeHarnesses ? '0' : '1'));
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load setup options');
     clientSetupData = data;
@@ -164,8 +165,9 @@ function openAddClientModal(initialTarget = 'roblox') {
     addClientHarnessRestartMessage = '';
     addClientDirectBridge = 'localhost:16384';
     addClientModal.classList.add('open');
-    renderAddClientLoading();
-    refreshClientSetupData()
+    if (initialTarget === 'harness') renderAddClientLoading();
+    else renderAddClient();
+    refreshClientSetupData(initialTarget === 'harness')
         .then(renderAddClient)
         .catch((error) => {
             addClientBody.innerHTML = '<div class="add-client-status add-client-status--error">' + escapeHtml(error.message || error) + '</div>';

@@ -58,6 +58,17 @@ test("harness installer exposes machine-readable detected targets", async () => 
   assert.ok(!targets.some((target) => target.id === "manual"));
 });
 
+test("dashboard harness detection skips slow per-process probes", async () => {
+  const [installer, route] = await Promise.all([
+    fs.readFile(installerPath, "utf8"),
+    fs.readFile(path.join(repoRoot, "src", "http", "routes", "api", "client-setup.ts"), "utf8"),
+  ]);
+
+  assert.match(installer, /return Boolean\(findOnPath\(command\)\);/);
+  assert.match(installer, /spawnSync\("tasklist\.exe"/);
+  assert.match(route, /"--skip-running-status"/);
+});
+
 test("install-only mode selects explicit harnesses and never restarts them", async () => {
   const { stdout } = await execFileAsync(
     process.execPath,
@@ -717,7 +728,12 @@ test("dashboard add menu routes harness installs through the client setup API", 
   assert.match(html, /data-add-client-kind="mcp"/);
   assert.match(html, /data-add-client-kind="harness"/);
   assert.match(clientSetupJs, /action: 'install-harnesses'/);
+  assert.match(clientSetupJs, /includeHarnesses=/);
+  assert.match(clientSetupJs, /includeTailscale=/);
+  assert.match(clientSetupJs, /else renderAddClient\(\);/);
   assert.match(route, /"--install-only"/);
+  assert.match(route, /includeTailscale \? getTailscaleStatus\(\)/);
+  assert.match(route, /Promise\.all\(\[/);
   assert.match(route, /restartMessage/);
 });
 
@@ -771,14 +787,17 @@ test("dashboard update control starts and monitors the automatic updater", async
   ]);
 
   assert.match(html, /id="settingsUpdateBtn"/);
+  assert.match(html, /id="settingsRestartBtn"/);
   assert.match(html, /restart the background core automatically/);
   assert.match(dashboardScript, /createUpdateSettings/);
-  assert.match(updateScript, /dashboardApiFetch\('\/api\/update', \{ method: 'POST' \}\)/);
+  assert.match(updateScript, /JSON\.stringify\(\{ action \}\)/);
+  assert.match(updateScript, /startOperation\('restart'\)/);
   assert.match(updateScript, /Waiting for the updated server to restart/);
   assert.match(updateScript, /disconnectStartedAt \|\|= Date\.now\(\)/);
   assert.doesNotMatch(updateScript, /updateStartedAt/);
   assert.match(updateScript, /RECONNECT_GRACE_MS = 90_000/);
   assert.match(route, /dashboard-update-worker\.mjs/);
+  assert.match(route, /--restart-only/);
   assert.ok(route.indexOf("writeUpdateStatus(initialStatus)") < route.indexOf("const child = spawn("));
   assert.match(route, /String\(process\.pid\)/);
   assert.match(route, /coreInstanceId/);
@@ -786,6 +805,7 @@ test("dashboard update control starts and monitors the automatic updater", async
   assert.match(route, /return "archive"/);
   assert.match(worker, /acquireUpdateLock\(runId\)/);
   assert.match(worker, /runStagedUpdate/);
+  assert.match(worker, /restartActiveCore/);
   assert.match(command, /runStagedUpdate/);
   assert.match(packageJson, /"update": "node scripts\/update\.mjs"/);
   assert.match(runner, /"git", \["fetch", "--prune"\]/);

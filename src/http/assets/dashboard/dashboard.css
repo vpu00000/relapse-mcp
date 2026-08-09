@@ -1370,6 +1370,11 @@ body[data-has-background-media="true"] .sidebar {
 }
 .settings-update-copy { min-width: 0; }
 .settings-update-copy .settings-card-desc { margin-bottom: 0; }
+.settings-update-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 8px;
+}
 .settings-update-status {
     min-height: 18px;
     color: var(--text-tertiary);
@@ -2192,6 +2197,7 @@ body.decompiler-drag-active * {
     .server-graph { height: 260px; }
     .no-client-search-row { flex-direction: column; }
     .settings-update-row { align-items: flex-start; flex-direction: column; }
+    .settings-update-actions { width: 100%; flex-direction: column; }
     .settings-update-btn { width: 100%; }
     .settings-card-footer--status { align-items: flex-start; flex-direction: column; }
     .settings-card-footer-status { text-align: left; }

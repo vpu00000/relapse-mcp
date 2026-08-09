@@ -4,11 +4,13 @@ const ACTIVE_STATES = new Set(['running', 'restarting']);
 
 export function createUpdateSettings({ $, dashboardApiFetch, showToast }) {
     const button = $('settingsUpdateBtn');
+    const restartButton = $('settingsRestartBtn');
     const status = $('settingsUpdateStatus');
-    if (!button || !status) return;
+    if (!button || !restartButton || !status) return;
 
     let pollTimer = null;
-    let updateInProgress = false;
+    let operationInProgress = false;
+    let activeAction = 'update';
     let disconnectStartedAt = 0;
     let lastState = 'idle';
     let hasRendered = false;
@@ -19,18 +21,25 @@ export function createUpdateSettings({ $, dashboardApiFetch, showToast }) {
             ? update.message
             : 'Ready to check for updates.';
         const available = update?.available !== false;
+        activeAction = update?.operation === 'restart' ? 'restart' : 'update';
         status.textContent = message;
         status.dataset.state = state;
-        updateInProgress = ACTIVE_STATES.has(state);
+        operationInProgress = ACTIVE_STATES.has(state);
         disconnectStartedAt = 0;
         button.disabled = !available || ACTIVE_STATES.has(state);
+        restartButton.disabled = !available || ACTIVE_STATES.has(state);
         button.textContent = !available
             ? 'Unavailable'
-            : state === 'running'
+            : ACTIVE_STATES.has(state) && activeAction === 'update' && state === 'running'
             ? 'Updating…'
-            : state === 'restarting'
+            : ACTIVE_STATES.has(state) && activeAction === 'update' && state === 'restarting'
                 ? 'Restarting…'
                 : 'Update now';
+        restartButton.textContent = !available
+            ? 'Unavailable'
+            : ACTIVE_STATES.has(state) && activeAction === 'restart'
+                ? 'Restarting…'
+                : 'Restart server';
 
         if (hasRendered && lastState !== state && state === 'complete') {
             showToast(message, 'success', 5000);
@@ -60,12 +69,14 @@ export function createUpdateSettings({ $, dashboardApiFetch, showToast }) {
                 stopPolling();
             }
         } catch {
-            if (updateInProgress) disconnectStartedAt ||= Date.now();
+            if (operationInProgress) disconnectStartedAt ||= Date.now();
             if (disconnectStartedAt && Date.now() - disconnectStartedAt < RECONNECT_GRACE_MS) {
                 status.textContent = 'Waiting for the updated server to restart…';
                 status.dataset.state = 'restarting';
                 button.disabled = true;
-                button.textContent = 'Restarting…';
+                restartButton.disabled = true;
+                if (activeAction === 'update') button.textContent = 'Restarting…';
+                else restartButton.textContent = 'Restarting…';
                 schedulePoll();
                 return;
             }
@@ -73,7 +84,9 @@ export function createUpdateSettings({ $, dashboardApiFetch, showToast }) {
             status.textContent = 'Could not reach the update service.';
             status.dataset.state = 'failed';
             button.disabled = false;
+            restartButton.disabled = false;
             button.textContent = 'Try again';
+            restartButton.textContent = 'Restart server';
         }
     }
 
@@ -85,27 +98,38 @@ export function createUpdateSettings({ $, dashboardApiFetch, showToast }) {
         }, POLL_INTERVAL_MS);
     }
 
-    button.addEventListener('click', async () => {
+    async function startOperation(action) {
+        activeAction = action;
         button.disabled = true;
-        status.textContent = 'Starting the automatic update…';
-        status.dataset.state = 'running';
-        updateInProgress = true;
+        restartButton.disabled = true;
+        status.textContent = action === 'restart'
+            ? 'Starting the server restart…'
+            : 'Starting the automatic update…';
+        status.dataset.state = action === 'restart' ? 'restarting' : 'running';
+        operationInProgress = true;
         disconnectStartedAt = 0;
         try {
-            const response = await dashboardApiFetch('/api/update', { method: 'POST' });
+            const response = await dashboardApiFetch('/api/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action }),
+            });
             const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'Update could not be started.');
+            if (!response.ok) throw new Error(data.error || 'Server operation could not be started.');
             render(data);
             schedulePoll();
         } catch (error) {
-            updateInProgress = false;
+            operationInProgress = false;
             disconnectStartedAt = 0;
             render({
                 state: 'failed',
-                message: error instanceof Error ? error.message : 'Update could not be started.',
+                message: error instanceof Error ? error.message : 'Server operation could not be started.',
             });
         }
-    });
+    }
+
+    button.addEventListener('click', () => void startOperation('update'));
+    restartButton.addEventListener('click', () => void startOperation('restart'));
 
     window.addEventListener('beforeunload', stopPolling, { once: true });
     void refresh();

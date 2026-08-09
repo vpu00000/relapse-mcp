@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
@@ -163,7 +164,7 @@ test("the packed update endpoint enables archive-backed updates without Git meta
   assert.equal(getBody.source, "archive");
 
   const postCapture = responseCapture();
-  await route.POST({}, postCapture.response);
+  await route.POST(Readable.from([]), postCapture.response);
   const postBody = JSON.parse(postCapture.capture.body);
   assert.equal(postCapture.capture.status, 202);
   assert.equal(postBody.source, "archive");

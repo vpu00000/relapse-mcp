@@ -219,7 +219,7 @@ async function getHarnessTargets(force = false): Promise<HarnessTarget[]> {
 
   const result = await runCommand(
     process.execPath,
-    [HARNESS_INSTALLER_PATH, "--list-harnesses-json", "--plain"],
+    [HARNESS_INSTALLER_PATH, "--list-harnesses-json", "--skip-running-status", "--plain"],
     15000,
     REPO_ROOT
   );
@@ -240,7 +240,7 @@ async function getHarnessTargets(force = false): Promise<HarnessTarget[]> {
       typeof candidate.reason === "string"
     );
   });
-  harnessTargetsCache = { expiresAt: Date.now() + 5000, targets };
+  harnessTargetsCache = { expiresAt: Date.now() + 30000, targets };
   return targets;
 }
 
@@ -452,8 +452,10 @@ async function getInstallPlan(): Promise<InstallPlan | null> {
 }
 
 async function getTailscaleStatus(): Promise<Record<string, unknown>> {
-  const binary = await findTailscaleBinary();
-  const installPlan = await getInstallPlan();
+  const [binary, installPlan] = await Promise.all([
+    findTailscaleBinary(),
+    getInstallPlan(),
+  ]);
   const base = {
     platform: process.platform,
     installed: Boolean(binary),
@@ -466,8 +468,10 @@ async function getTailscaleStatus(): Promise<Record<string, unknown>> {
 
   if (!binary) return base;
 
-  const statusResult = await runCommand(binary, ["status", "--json"], 10000);
-  const ipResult = await runCommand(binary, ["ip", "-4"], 10000);
+  const [statusResult, ipResult] = await Promise.all([
+    runCommand(binary, ["status", "--json"], 10000),
+    runCommand(binary, ["ip", "-4"], 10000),
+  ]);
   let statusJson: Record<string, unknown> | null = null;
 
   if (statusResult.ok && statusResult.stdout) {
@@ -492,17 +496,26 @@ async function getTailscaleStatus(): Promise<Record<string, unknown>> {
   };
 }
 
-async function setupPayload(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function setupPayload(
+  req: IncomingMessage,
+  includeHarnesses: boolean,
+  includeTailscale: boolean
+): Promise<Record<string, unknown>> {
   const lanIp = getLocalLanIp();
-  const tailscale = await getTailscaleStatus();
+  const harnessesPromise = includeHarnesses
+    ? getHarnessTargets().then(
+        (targets) => ({ harnesses: targets.filter((target) => target.detected), harnessError: null }),
+        (error) => ({
+          harnesses: [] as HarnessTarget[],
+          harnessError: error instanceof Error ? error.message : String(error),
+        })
+      )
+    : Promise.resolve({ harnesses: [] as HarnessTarget[], harnessError: null });
+  const [tailscale, harnessResult] = await Promise.all([
+    includeTailscale ? getTailscaleStatus() : Promise.resolve({} as Record<string, unknown>),
+    harnessesPromise,
+  ]);
   const tailscaleIp = typeof tailscale.ip === "string" ? tailscale.ip : null;
-  let harnesses: HarnessTarget[] = [];
-  let harnessError: string | null = null;
-  try {
-    harnesses = (await getHarnessTargets()).filter((target) => target.detected);
-  } catch (error) {
-    harnessError = error instanceof Error ? error.message : String(error);
-  }
 
   return {
     serverPort: SERVER_PORT,
@@ -521,8 +534,8 @@ async function setupPayload(req: IncomingMessage): Promise<Record<string, unknow
     },
     autoexec: getAutoexecStatus(),
     tailscale,
-    harnesses,
-    harnessError,
+    harnesses: harnessResult.harnesses,
+    harnessError: harnessResult.harnessError,
   };
 }
 
@@ -587,7 +600,12 @@ async function runTailscaleInstall(elevated: boolean): Promise<Record<string, un
 }
 
 export async function GET(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  json(res, 200, await setupPayload(req));
+  const url = new URL(req.url || "/api/client-setup", "http://localhost");
+  json(res, 200, await setupPayload(
+    req,
+    url.searchParams.get("includeHarnesses") !== "0",
+    url.searchParams.get("includeTailscale") !== "0"
+  ));
 }
 
 export async function POST(req: IncomingMessage, res: ServerResponse): Promise<void> {

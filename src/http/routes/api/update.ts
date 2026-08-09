@@ -14,6 +14,7 @@ import {
   updateWorkerIsRunning,
   writeUpdateStatus,
 } from "../../../shared/update-status.mjs";
+import { readJsonBody } from "../../body.js";
 
 const WORKER_PATH = fileURLToPath(
   new URL("../../../updater/dashboard-update-worker.mjs", import.meta.url)
@@ -145,11 +146,24 @@ export async function GET(
 }
 
 export async function POST(
-  _req: IncomingMessage,
+  req: IncomingMessage,
   res: ServerResponse
 ): Promise<void> {
+  let body: { action?: string };
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    json(res, 400, { error: "Invalid JSON body." });
+    return;
+  }
+  if (body.action !== undefined && body.action !== "update" && body.action !== "restart") {
+    json(res, 400, { error: "action must be update or restart." });
+    return;
+  }
+  const action: "update" | "restart" = body.action === "restart" ? "restart" : "update";
+
   if (launchInProgress) {
-    json(res, 409, { error: "An update is already starting." });
+    json(res, 409, { error: "A server operation is already starting." });
     return;
   }
 
@@ -162,7 +176,7 @@ export async function POST(
     }
     const lock = await readUpdateLock();
     if (lock && updateWorkerIsRunning(lock)) {
-      json(res, 409, { error: "An update is already in progress." });
+      json(res, 409, { error: "An update or restart is already in progress." });
       return;
     }
 
@@ -172,15 +186,18 @@ export async function POST(
       typeof current.updatedAt === "number" &&
       Date.now() - current.updatedAt < STARTING_STATUS_MAX_AGE_MS
     ) {
-      json(res, 409, { error: "An update is already in progress.", ...current });
+      json(res, 409, { error: "An update or restart is already in progress.", ...current });
       return;
     }
 
     const startedAt = Date.now();
     const runId = randomUUID();
     const initialStatus = {
-      state: "running" as const,
-      message: "Starting the automatic update…",
+      state: action === "restart" ? "restarting" as const : "running" as const,
+      message: action === "restart"
+        ? "Starting the server restart…"
+        : "Starting the automatic update…",
+      operation: action,
       startedAt,
       runId,
     };
@@ -196,6 +213,7 @@ export async function POST(
         String(process.pid),
         "--core-instance-id",
         coreInstanceId,
+        ...(action === "restart" ? ["--restart-only"] : []),
       ],
       {
         cwd: REPO_ROOT,

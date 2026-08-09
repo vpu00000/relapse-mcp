@@ -3,6 +3,7 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { restartActiveCore } from "./dashboard-update-runtime.mjs";
 import { runStagedUpdate } from "./update-runner.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,7 @@ const {
 const runId = argValue("--run-id");
 const corePid = Number.parseInt(argValue("--core-pid") || "", 10);
 const coreInstanceId = argValue("--core-instance-id");
+const restartOnly = process.argv.includes("--restart-only");
 const corePort =
   Number.parseInt(process.env.ROBLOX_MCP_PORT || "", 10) || 16384;
 const operationStartedAt = Date.now();
@@ -51,6 +53,7 @@ async function status(state, message, extra = {}) {
       startedAt: extra.startedAt || operationStartedAt,
       finishedAt: extra.finishedAt,
       error: extra.error,
+      operation: restartOnly ? "restart" : "update",
       workerPid: process.pid,
     },
     { expectedRunId: runId }
@@ -66,20 +69,27 @@ async function main() {
 
   await acquireUpdateLock(runId);
   const startedAt = operationStartedAt;
-  const result = await runStagedUpdate({
-    serverRoot,
-    runId,
-    corePid,
-    coreInstanceId,
-    corePort,
-    status: (message, extra = {}) => status(
-      extra.state || "running",
-      message,
-      { ...extra, startedAt }
-    ),
-  });
+  const result = restartOnly
+    ? await restartActiveCore({
+        serverRoot,
+        corePid,
+        coreInstanceId,
+        corePort,
+      })
+    : await runStagedUpdate({
+        serverRoot,
+        runId,
+        corePid,
+        coreInstanceId,
+        corePort,
+        status: (message, extra = {}) => status(
+          extra.state || "running",
+          message,
+          { ...extra, startedAt }
+        ),
+      });
   await status("complete", result.message, {
-    source: result.source,
+    source: restartOnly ? "active-release" : result.source,
     startedAt,
     finishedAt: Date.now(),
   }).catch(() => undefined);

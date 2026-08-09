@@ -5,19 +5,24 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const runtimeDirectory = path.dirname(fileURLToPath(import.meta.url));
-const releasePointerModule = pathToFileURL(
+const sharedRuntimeDirectory =
   path.basename(runtimeDirectory) === "updater" &&
     path.basename(path.dirname(runtimeDirectory)) === "dist"
     ? path.join(runtimeDirectory, "..", "shared", "release-pointer.mjs")
-    : path.join(runtimeDirectory, "..", "dist", "shared", "release-pointer.mjs")
-).href;
+    : path.join(runtimeDirectory, "..", "dist", "shared", "release-pointer.mjs");
+const releasePointerModule = pathToFileURL(sharedRuntimeDirectory).href;
 const {
   readReleasePointer,
+  resolveActiveReleaseRoot,
   writeReleasePointer,
 } = await import(releasePointerModule);
+const {
+  applyBackgroundService,
+  getBackgroundServiceStatus,
+} = await import(pathToFileURL(path.join(path.dirname(sharedRuntimeDirectory), "background-service-install.mjs")).href);
 
 const CORE_STOP_TIMEOUT_MS = 10_000;
-const CORE_START_TIMEOUT_MS = 20_000;
+const CORE_START_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 200;
 
 function delay(milliseconds) {
@@ -107,7 +112,7 @@ async function waitForCore(
     if (child?.spawnError) {
       throw child.spawnError;
     }
-    if (child?.exitCode !== null) {
+    if (child && child.exitCode !== null) {
       throw new Error(`Background core exited with code ${child.exitCode}.`);
     }
     try {
@@ -190,16 +195,28 @@ export async function validateCandidateCore(candidateDist, serverRoot) {
 }
 
 async function verifyCoreIdentity(coreUrl, expectedPid, expectedInstanceId) {
-  const info = await fetchCoreInfo(coreUrl);
-  if (
-    info?.architecture !== "background-core" ||
-    info.pid !== expectedPid ||
-    info.instanceId !== expectedInstanceId
-  ) {
-    throw new Error(
-      "The running background core changed during the update; refusing to signal its PID."
-    );
+  const deadline = Date.now() + CORE_STOP_TIMEOUT_MS;
+  let lastError = "health endpoint unavailable";
+  while (Date.now() < deadline) {
+    try {
+      const info = await fetchCoreInfo(coreUrl);
+      if (
+        info?.architecture !== "background-core" ||
+        info.pid !== expectedPid ||
+        info.instanceId !== expectedInstanceId
+      ) {
+        throw new Error(
+          "The running background core changed during the update; refusing to signal its PID."
+        );
+      }
+      return;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("refusing to signal")) throw error;
+      lastError = error instanceof Error ? error.message : String(error);
+      await delay(POLL_INTERVAL_MS);
+    }
   }
+  throw new Error(`Could not verify the running background core: ${lastError}`);
 }
 
 export async function startReleaseCore({
@@ -225,6 +242,57 @@ export async function startReleaseCore({
     await stopChild(rollback).catch(() => undefined);
     throw error;
   }
+}
+
+export async function restartActiveCore({
+  serverRoot,
+  corePid,
+  coreInstanceId,
+  corePort,
+  coreExecutable,
+}) {
+  const releaseRoot = await resolveActiveReleaseRoot(serverRoot);
+  const service = getBackgroundServiceStatus();
+  const serviceConfig = typeof service.configPath === "string"
+    ? await fs.readFile(service.configPath, "utf8").catch(() => "")
+    : "";
+  const serviceOwnsCore = service.enabled && (
+    serviceConfig.includes(serverRoot) ||
+    service.manager === "Windows Task Scheduler (legacy)"
+  );
+  if (serviceOwnsCore) {
+    const coreUrl = `http://127.0.0.1:${corePort}`;
+    await verifyCoreIdentity(coreUrl, corePid, coreInstanceId);
+    await applyBackgroundService({
+      serverRoot,
+      mode: "background",
+      nodePath: coreExecutable || process.execPath,
+    });
+    const info = await waitForCore(coreUrl, { timeoutMs: CORE_START_TIMEOUT_MS });
+    if (info.pid === corePid || info.instanceId === coreInstanceId) {
+      throw new Error("The background service did not replace the running core.");
+    }
+    return {
+      corePid: info.pid,
+      releaseRoot,
+      message: `Server restarted through ${service.manager} using the active verified release. Connected adapters will reconnect automatically.`,
+    };
+  }
+  const child = await restartCoreWithRollback({
+    serverRoot,
+    corePid,
+    coreInstanceId,
+    corePort,
+    nextReleaseRoot: releaseRoot,
+    previousReleaseRoot: releaseRoot,
+    coreExecutable,
+  });
+  return {
+    corePid: child.pid,
+    releaseRoot,
+    message:
+      "Server restarted using the active verified release. Connected adapters will reconnect automatically.",
+  };
 }
 
 export async function restartCoreWithRollback({

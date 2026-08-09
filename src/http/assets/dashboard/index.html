@@ -471,7 +471,10 @@
                             <div class="settings-card-title">Server updates</div>
                             <div class="settings-card-desc">Pull the latest version, rebuild the server, and restart the background core automatically.</div>
                         </div>
-                        <button class="settings-test-btn settings-update-btn" id="settingsUpdateBtn" type="button">Update now</button>
+                        <div class="settings-update-actions">
+                            <button class="settings-test-btn settings-update-btn" id="settingsRestartBtn" type="button">Restart server</button>
+                            <button class="settings-test-btn settings-update-btn" id="settingsUpdateBtn" type="button">Update now</button>
+                        </div>
                     </div>
                     <div class="settings-card-footer settings-card-footer--status">
                         <span class="settings-update-status settings-card-footer-status" id="settingsUpdateStatus" data-state="idle" role="status" aria-live="polite">Checking update status…</span>

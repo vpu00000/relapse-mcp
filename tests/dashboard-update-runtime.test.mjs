@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   activateCandidateBuild,
+  restartActiveCore,
   validateCandidateCore,
 } from "../scripts/dashboard-update-runtime.mjs";
 
@@ -232,6 +233,34 @@ test("dashboard updater validates, atomically activates, and health-checks a can
     state: "restarting",
     message: "Switching to the verified update…",
   }]);
+});
+
+test("dashboard restart launches the active verified release", async (t) => {
+  const setup = await fixture(t);
+  const activated = await activateCandidateBuild({
+    serverRoot: setup.root,
+    candidateDist: setup.candidateDist,
+    candidateNodeModules: setup.candidateNodeModules,
+    runId: "restart-active",
+    corePid: setup.oldInfo.pid,
+    coreInstanceId: setup.oldInfo.instanceId,
+    corePort: setup.port,
+    writeStatus: async () => undefined,
+  });
+  setup.cleanupPids.add(activated.corePid);
+  const active = await waitForHealth(setup.port, "candidate-core");
+  const restarted = await restartActiveCore({
+    serverRoot: setup.root,
+    corePid: active.pid,
+    coreInstanceId: active.instanceId,
+    corePort: setup.port,
+  });
+  setup.cleanupPids.add(restarted.corePid);
+
+  assert.notEqual(restarted.corePid, active.pid);
+  assert.equal(restarted.releaseRoot, await activeReleaseRoot(setup.root));
+  assert.equal((await waitForHealth(setup.port, "candidate-core")).pid, restarted.corePid);
+  assert.match(restarted.message, /active verified release/);
 });
 
 test("status reporting cannot interrupt a successful release activation", async (t) => {

@@ -7,6 +7,7 @@ export interface UpdateStatus {
   workerPid?: number;
   runId?: string;
   error?: string;
+  operation?: "update" | "restart";
 }
 
 export const UPDATE_STATUS_PATH: string;
