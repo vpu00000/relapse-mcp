@@ -15,6 +15,8 @@ import {
   getDetectedAutoexecTargets,
   writeLoaderToAutoexec,
 } from "../src/shared/autoexec.mjs";
+import { getLocalLanIp, getTailscaleIp } from "../src/shared/local-addresses.mjs";
+import { mcpServersRecipeJson } from "../src/shared/mcp-recipe.mjs";
 import { resolvePackageCommand } from "./package-command.mjs";
 import { MAIN_REPO_URL } from "./repository-source.mjs";
 
@@ -1223,50 +1225,6 @@ function findBridgeTargetOption(options, value) {
   }) || options[0];
 }
 
-function getLocalLanIp() {
-  const nets = os.networkInterfaces();
-  const candidates = [];
-  for (const entries of Object.values(nets)) {
-    for (const entry of entries || []) {
-      if (entry.family !== "IPv4" || entry.internal) continue;
-      candidates.push(entry.address);
-    }
-  }
-  return candidates.find((ip) => /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) || candidates[0] || null;
-}
-
-function getTailscaleIp() {
-  const binary = findTailscaleBinary();
-  if (!binary) return null;
-  const result = spawnSync(binary, ["ip", "-4"], {
-    encoding: "utf8",
-    stdio: "pipe",
-    shell: false,
-  });
-  if (result.status !== 0) return null;
-  const ip = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-  return ip || null;
-}
-
-function findTailscaleBinary() {
-  const command = process.platform === "win32" ? "tailscale.exe" : "tailscale";
-  const fromPath = findOnPath(command);
-  if (fromPath) return fromPath;
-  const candidates = process.platform === "darwin"
-    ? [
-        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-        "/opt/homebrew/bin/tailscale",
-        "/usr/local/bin/tailscale",
-      ]
-    : process.platform === "win32"
-      ? [
-          "C:\\Program Files\\Tailscale\\tailscale.exe",
-          "C:\\Program Files (x86)\\Tailscale\\tailscale.exe",
-        ]
-      : ["/usr/bin/tailscale", "/usr/local/bin/tailscale"];
-  return candidates.find((filePath) => exists(filePath)) || null;
-}
-
 async function copyToClipboard(text) {
   const command =
     process.platform === "darwin"
@@ -1774,7 +1732,7 @@ function printManualMcpRecipe(harness, serverEntry) {
   for (const instruction of harness.config.instructions || []) {
     console.log(`  ${instruction}`);
   }
-  console.log(JSON.stringify({ mcpServers: { [SERVER_NAME]: mcpServerConfig(serverEntry) } }, null, 2));
+  console.log(mcpServersRecipeJson(serverEntry, SERVER_NAME));
 }
 
 function configPaths(config) {

@@ -173,6 +173,23 @@ button { color: inherit; }
   justify-content: space-between;
   gap: 24px;
 }
+.section-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.section-manual {
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 12px;
+  transition: color 140ms ease;
+}
+.section-manual:hover { color: var(--text); }
 .filter-tabs {
   height: 36px;
   display: flex;
@@ -818,6 +835,17 @@ button { color: inherit; }
 }
 .button-secondary { background: transparent; }
 .button-secondary:hover { background: var(--surface-hover); }
+.button-ghost {
+  min-width: 0;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.button-ghost:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
 .button-primary {
   border-color: var(--accent);
   background: var(--accent);
@@ -1044,6 +1072,43 @@ button { color: inherit; }
   gap: 8px;
   padding: 18px;
 }
+.manual-dialog {
+  width: min(560px, 100%);
+}
+.manual-recipe {
+  margin: 0 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.manual-recipe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 550;
+}
+.manual-recipe-head .button {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.manual-recipe-code {
+  margin: 0;
+  max-height: 240px;
+  padding: 12px;
+  overflow: auto;
+  color: var(--text);
+  font: 11px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 body.is-installation-success {
   grid-template-rows: 56px minmax(0, 1fr);
@@ -1237,9 +1302,12 @@ body.is-installation-success .installer-footer {
     padding-top: 12px;
   }
   .section-header .search { width: 100%; }
+  .section-tools {
+    width: 100%;
+    justify-content: space-between;
+  }
   .filter-tabs {
     height: 36px;
-    align-self: flex-end;
   }
   .harness-row {
     grid-template-columns: 28px minmax(0, 1fr);

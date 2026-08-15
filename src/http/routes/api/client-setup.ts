@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "http";
-import os from "node:os";
 import path from "node:path";
-import { SERVER_ROOT } from "../../../config.js";
+import { SERVER_NAME, SERVER_ROOT } from "../../../config.js";
 import {
   DEFAULT_BRIDGE_URL,
   SERVER_PORT,
@@ -14,9 +13,17 @@ import {
   getAutoexecStatus,
   writeLoaderToAutoexec,
 } from "../../../shared/autoexec.mjs";
+import {
+  getLocalAddresses,
+  isIpv4Address,
+  isTailscaleIpv4,
+} from "../../../shared/local-addresses.mjs";
+import { mcpServerEntry, mcpServersRecipeJson } from "../../../shared/mcp-recipe.mjs";
 import { readJsonBody } from "../../body.js";
 
 const COMMAND_TIMEOUT_MS = 30000;
+const LOOKUP_TIMEOUT_MS = 1500;
+const TAILSCALE_PROBE_TIMEOUT_MS = 2000;
 const HARNESS_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const HARNESS_INSTALLER_PATH = path.join(
   SERVER_ROOT,
@@ -73,19 +80,37 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-function getLocalLanIp(): string | null {
-  const candidates: string[] = [];
-  for (const entries of Object.values(os.networkInterfaces())) {
-    for (const entry of entries || []) {
-      if (entry.family !== "IPv4" || entry.internal) continue;
-      candidates.push(entry.address);
-    }
+function knownTailscaleBinaries(): string[] {
+  if (process.platform === "darwin") {
+    return [
+      "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+      "/opt/homebrew/bin/tailscale",
+      "/usr/local/bin/tailscale",
+    ];
   }
-  return (
-    candidates.find((ip) => /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)) ||
-    candidates[0] ||
-    null
-  );
+  if (process.platform === "win32") {
+    return [
+      "C:\\Program Files\\Tailscale\\tailscale.exe",
+      "C:\\Program Files (x86)\\Tailscale\\tailscale.exe",
+    ];
+  }
+  return ["/usr/bin/tailscale", "/usr/local/bin/tailscale"];
+}
+
+function findTailscaleBinarySync(): string | null {
+  return knownTailscaleBinaries().find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function tailscaleIpFromStatus(statusJson: Record<string, unknown> | null): string | null {
+  const self = statusJson?.Self && typeof statusJson.Self === "object"
+    ? statusJson.Self as Record<string, unknown>
+    : null;
+  const values = [
+    ...(Array.isArray(statusJson?.TailscaleIPs) ? statusJson.TailscaleIPs : []),
+    ...(Array.isArray(self?.TailscaleIPs) ? self.TailscaleIPs : []),
+  ];
+  const ips = values.filter((value): value is string => typeof value === "string");
+  return ips.find((ip) => isTailscaleIpv4(ip)) || ips.find((ip) => isIpv4Address(ip)) || null;
 }
 
 function connector(bridgeUrl: string): { bridgeUrl: string; loaderSnippet: string } {
@@ -127,15 +152,22 @@ function runCommand(
 
     const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
-    const unixProcessGroupExists = () => {
-      if (!child.pid || process.platform === "win32") return false;
+    const pidExists = (pid: number | undefined, processGroup = false) => {
+      if (!pid) return false;
       try {
-        process.kill(-child.pid, 0);
+        process.kill(processGroup ? -pid : pid, 0);
         return true;
       } catch (error) {
         return (error as NodeJS.ErrnoException).code !== "ESRCH";
       }
     };
+
+    const unixProcessGroupExists = () => {
+      if (process.platform === "win32") return false;
+      return pidExists(child.pid, true);
+    };
+
+    const childStillRunning = () => child.exitCode === null && child.signalCode === null && pidExists(child.pid);
 
     const signalChild = (force: boolean): Promise<void> => {
       if (process.platform === "win32" && child.pid && killProcessTree) {
@@ -160,14 +192,19 @@ function runCommand(
 
     const terminateProcessTree = async () => {
       await signalChild(false);
-      await wait(5000);
-      if (process.platform === "win32") {
-        await signalChild(true);
-        return;
+      const graceMs = killProcessTree ? 5000 : 250;
+      const deadline = Date.now() + graceMs;
+      while (Date.now() < deadline) {
+        const alive = killProcessTree && process.platform !== "win32"
+          ? unixProcessGroupExists()
+          : childStillRunning();
+        if (!alive) return;
+        await wait(50);
       }
-      if (!killProcessTree || !unixProcessGroupExists()) return;
       await signalChild(true);
-      while (unixProcessGroupExists()) await wait(50);
+      if (killProcessTree && process.platform !== "win32") {
+        while (unixProcessGroupExists()) await wait(50);
+      }
     };
 
     const finish = (result: CommandResult) => {
@@ -387,31 +424,15 @@ async function runElevated(file: string, args: string[], timeoutMs = COMMAND_TIM
 async function commandExists(command: string): Promise<string | null> {
   const result =
     process.platform === "win32"
-      ? await runCommand("where.exe", [command], 5000)
-      : await runCommand("which", [command], 5000);
+      ? await runCommand("where.exe", [command], LOOKUP_TIMEOUT_MS)
+      : await runCommand("which", [command], LOOKUP_TIMEOUT_MS);
   if (!result.ok) return null;
   return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || null;
 }
 
 async function findTailscaleBinary(): Promise<string | null> {
-  const fromPath = await commandExists(process.platform === "win32" ? "tailscale.exe" : "tailscale");
-  if (fromPath) return fromPath;
-
-  const candidates =
-    process.platform === "darwin"
-      ? [
-          "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-          "/opt/homebrew/bin/tailscale",
-          "/usr/local/bin/tailscale",
-        ]
-      : process.platform === "win32"
-        ? [
-            "C:\\Program Files\\Tailscale\\tailscale.exe",
-            "C:\\Program Files (x86)\\Tailscale\\tailscale.exe",
-          ]
-        : ["/usr/bin/tailscale", "/usr/local/bin/tailscale"];
-
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  return findTailscaleBinarySync()
+    || commandExists(process.platform === "win32" ? "tailscale.exe" : "tailscale");
 }
 
 async function getInstallPlan(): Promise<InstallPlan | null> {
@@ -451,27 +472,29 @@ async function getInstallPlan(): Promise<InstallPlan | null> {
   return null;
 }
 
-async function getTailscaleStatus(): Promise<Record<string, unknown>> {
-  const [binary, installPlan] = await Promise.all([
-    findTailscaleBinary(),
-    getInstallPlan(),
-  ]);
+async function getTailscaleStatus(options: { probeCli?: boolean } = {}): Promise<Record<string, unknown>> {
+  const { tailscaleIp } = getLocalAddresses();
+  const binary = options.probeCli ? await findTailscaleBinary() : findTailscaleBinarySync();
+  const installPlan = options.probeCli && !binary && !tailscaleIp ? await getInstallPlan() : null;
   const base = {
     platform: process.platform,
-    installed: Boolean(binary),
+    installed: Boolean(binary || tailscaleIp),
     binary,
-    installSupported: Boolean(installPlan),
+    installSupported: Boolean(installPlan || binary || tailscaleIp),
     installLabel: installPlan?.label ?? null,
     downloadUrl: TAILSCALE_DOWNLOAD_URL,
     cliUrl: TAILSCALE_CLI_URL,
+    ip: tailscaleIp,
+    backendState: tailscaleIp ? "Running" : null,
+    connected: Boolean(tailscaleIp),
+    statusOk: true,
+    statusError: null as string | null,
+    ipError: null as string | null,
   };
 
-  if (!binary) return base;
+  if (tailscaleIp || !options.probeCli || !binary) return base;
 
-  const [statusResult, ipResult] = await Promise.all([
-    runCommand(binary, ["status", "--json"], 10000),
-    runCommand(binary, ["ip", "-4"], 10000),
-  ]);
+  const statusResult = await runCommand(binary, ["status", "--json"], TAILSCALE_PROBE_TIMEOUT_MS);
   let statusJson: Record<string, unknown> | null = null;
 
   if (statusResult.ok && statusResult.stdout) {
@@ -482,7 +505,7 @@ async function getTailscaleStatus(): Promise<Record<string, unknown>> {
     }
   }
 
-  const ip = ipResult.ok ? ipResult.stdout.split(/\s+/).find(Boolean) || null : null;
+  const ip = tailscaleIpFromStatus(statusJson);
   const backendState = typeof statusJson?.BackendState === "string" ? statusJson.BackendState : null;
 
   return {
@@ -492,7 +515,7 @@ async function getTailscaleStatus(): Promise<Record<string, unknown>> {
     connected: Boolean(ip),
     statusOk: statusResult.ok,
     statusError: statusResult.ok ? null : statusResult.stderr || statusResult.stdout || "Unable to read Tailscale status.",
-    ipError: ipResult.ok ? null : ipResult.stderr || ipResult.stdout || "Unable to read Tailscale IP.",
+    ipError: ip ? null : statusResult.ok ? "Unable to read Tailscale IP." : statusResult.stderr || statusResult.stdout || "Unable to read Tailscale IP.",
   };
 }
 
@@ -501,7 +524,7 @@ async function setupPayload(
   includeHarnesses: boolean,
   includeTailscale: boolean
 ): Promise<Record<string, unknown>> {
-  const lanIp = getLocalLanIp();
+  const { lanIp } = getLocalAddresses();
   const harnessesPromise = includeHarnesses
     ? getHarnessTargets().then(
         (targets) => ({ harnesses: targets.filter((target) => target.detected), harnessError: null }),
@@ -536,6 +559,11 @@ async function setupPayload(
     tailscale,
     harnesses: harnessResult.harnesses,
     harnessError: harnessResult.harnessError,
+    harnessRecipe: {
+      serverName: SERVER_NAME,
+      serverEntry: mcpServerEntry(SERVER_ROOT),
+      json: mcpServersRecipeJson(mcpServerEntry(SERVER_ROOT), SERVER_NAME),
+    },
   };
 }
 
@@ -564,7 +592,7 @@ async function runTailscaleUp(elevated: boolean): Promise<Record<string, unknown
     ok: result.ok,
     output: result.stdout,
     error: result.ok ? null : result.stderr || "Tailscale setup failed.",
-    tailscale: await getTailscaleStatus(),
+    tailscale: await getTailscaleStatus({ probeCli: true }),
   };
 }
 
@@ -595,7 +623,7 @@ async function runTailscaleInstall(elevated: boolean): Promise<Record<string, un
     ok: result.ok,
     output: result.stdout,
     error: result.ok ? null : result.stderr || "Tailscale install failed.",
-    tailscale: await getTailscaleStatus(),
+    tailscale: await getTailscaleStatus({ probeCli: true }),
   };
 }
 
@@ -639,7 +667,7 @@ export async function POST(req: IncomingMessage, res: ServerResponse): Promise<v
   }
 
   if (body.action === "tailscale-auto") {
-    const tailscale = await getTailscaleStatus();
+    const tailscale = await getTailscaleStatus({ probeCli: true });
     if (!tailscale.installed) {
       json(res, 200, await runTailscaleInstall(Boolean(body.elevated)));
       return;

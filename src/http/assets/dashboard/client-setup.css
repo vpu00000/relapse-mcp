@@ -418,6 +418,9 @@
     min-height: 28px; padding: 4px 8px; font-size: 12px;
     background: transparent;
 }
+.add-client-actions .add-client-btn--ghost {
+    min-height: 32px; padding: 6px 11px; font-size: 13px;
+}
 .add-client-guide {
     margin: 0; padding-left: 18px; color: var(--text-secondary);
     font-size: 13px; line-height: 1.6;

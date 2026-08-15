@@ -130,6 +130,26 @@ const themeSettings = createThemeSettings({
 const SHINY_LOCAL_ENDPOINT = 'http://localhost:3000/luau/decompile';
 const SHINY_HOSTED_ENDPOINT = 'https://medal.upio.dev/decompile';
 const BRIDGE_HOST_ENDPOINT_TOKEN = '{{BridgeHost}}';
+const LUACID_DEFAULT_OPTIONS = {
+    indent: 'tab',
+    type_annotations: 'functions',
+    discard_names: 'named',
+    generated_names: 'readable',
+    inferred_name_case: 'preserve',
+    prefer_const: false,
+    if_expressions: true,
+    early_return: true,
+    early_continue: true,
+    interpolated_strings: true,
+    math_constants: true,
+    fold_single_use_temps: true,
+    uninline_local_functions: true,
+    reroll_unrolled_loops: true,
+    unfold_module_tables: false,
+    keep_dead_functions: true,
+    unicode_strings: true,
+    upvalue_comments: false
+};
 const DEFAULT_DECOMPILER_RUNTIME = {
     adaptiveFallback: true,
     loadBalanceSlowProviders: true,
@@ -142,6 +162,7 @@ const DEFAULT_DECOMPILER_RUNTIME = {
         builtin: 8000,
         luaexpert: 10000,
         shiny: 6000,
+        luacid: 15000,
         oracle: 15000,
         konstant: 10000,
         fission: 6000,
@@ -166,6 +187,13 @@ const decompilerProviderUi = {
         description: 'Use a local Shiny server or the hosted Medal Server endpoint.',
         setupLabel: 'Download & setup Shiny',
         setupDescription: 'Downloads the latest Shiny release for this computer and starts the local server.'
+    },
+    luacid: {
+        label: 'Luacid',
+        byline: 'HTTP or WebSocket',
+        description: 'Luacid decompiler with keyless HTTP and paid WebSocket access.',
+        purchaseUrl: 'https://luacid.dev/#pricing',
+        keySystemUrl: 'https://luacid.dev/getkey'
     },
     oracle: {
         label: 'Oracle',
@@ -195,7 +223,7 @@ let decompilerDragId = null;
 let decompilerDragState = null;
 let decompilerModalProviderId = null;
 let customProviderEditor = null;
-let decompilerAdvancedOpen = true;
+let decompilerAdvancedOpen = false;
 let decompilerProviderAutoSaveTimer = null;
 let decompilerSetupState = {};
 let decompilerHealthRefreshInFlight = false;
@@ -2418,6 +2446,9 @@ function decompilerProviderIssue(id, provider) {
     if (id === 'oracle' && !provider.apiKeySet && !provider.apiKey) {
         return 'Authorization required. Add an Oracle API key before this provider can run.';
     }
+    if (id === 'luacid' && provider.options?.transport === 'websocket' && !provider.apiKeySet && !provider.apiKey) {
+        return 'A paid API key is required for WebSocket decompilation.';
+    }
     if (id !== 'builtin' && typeof provider.endpoint === 'string' && provider.endpoint.trim() === '') {
         return 'Endpoint required. Open provider settings and add a URL.';
     }
@@ -2435,6 +2466,13 @@ function decompilerProviderIssueSummaries() {
 function decompilerProviderByline(id, provider) {
     if (id === 'shiny') {
         return shinyMode(provider) === 'hosted' ? 'hosted' : 'local server';
+    }
+    if (id === 'luacid') {
+        const transport = provider.options?.transport;
+        const explicitHttp = transport === 'http' && provider.options?.transportExplicit === true;
+        return transport === 'websocket' || (!explicitHttp && (provider.apiKeySet || provider.apiKey))
+            ? 'WebSocket'
+            : 'HTTP';
     }
     return providerUi(id).byline;
 }
@@ -2952,6 +2990,7 @@ function openDecompilerRuntimeModal() {
 
 function openDecompilerProviderModal(id, options = {}) {
     if (id === 'builtin') return;
+    decompilerAdvancedOpen = false;
     decompilerModalProviderId = id;
     const provider = ensureDecompilerProvider(id);
     const ui = providerUi(id);
@@ -2961,6 +3000,8 @@ function openDecompilerProviderModal(id, options = {}) {
         id === 'oracle' ? 'Configure decompiler options.' : ui.description;
     $('decompilerProviderBody').innerHTML = id === 'oracle'
         ? oracleProviderModalHtml(provider)
+        : id === 'luacid'
+            ? luacidProviderModalHtml(provider)
         : isCustomDecompilerProviderId(id)
             ? customProviderModalHtml(provider)
             : endpointProviderModalHtml(id, provider);
@@ -2984,6 +3025,58 @@ function openDecompilerProviderModal(id, options = {}) {
         });
     }
     if (options.refreshSetup !== false) refreshDecompilerSetupStatus(id);
+}
+
+function luacidProviderModalHtml(provider) {
+    const maskedKey = provider.apiKey || (provider.apiKeySet ? '••••••••' : '');
+    const transport = provider.options?.transport === 'websocket'
+        ? 'websocket'
+        : provider.options?.transport === 'http' && provider.options?.transportExplicit === true
+            ? 'http'
+            : 'auto';
+    const options = { ...LUACID_DEFAULT_OPTIONS, ...(provider.options || {}) };
+    delete options.transport;
+    delete options.transportExplicit;
+    const ui = providerUi('luacid');
+    return `
+        <div class="settings-field">
+            <label>API key <span class="decompiler-field-hint">Optional for HTTP</span></label>
+            <div class="decompiler-input-action-row">
+                <input type="password" id="decompilerModalLuacidKey" value="${escapeHtml(maskedKey)}" placeholder="Luacid API key">
+                <details class="decompiler-key-menu">
+                    <summary class="modal-btn modal-btn--cancel decompiler-purchase-btn">Get a key</summary>
+                    <div class="decompiler-key-menu-list">
+                        <a href="${escapeHtml(ui.purchaseUrl)}" target="_blank" rel="noreferrer">Buy a key</a>
+                        <a href="${escapeHtml(ui.keySystemUrl)}" target="_blank" rel="noreferrer">Get a keysystem key</a>
+                    </div>
+                </details>
+            </div>
+        </div>
+        <button class="decompiler-advanced-toggle" type="button" data-action="toggle-provider-advanced">Advanced settings <span>${decompilerAdvancedOpen ? '^' : 'v'}</span></button>
+        <div class="decompiler-advanced-grid" id="decompilerAdvancedFields" ${decompilerAdvancedOpen ? '' : 'hidden'}>
+            <div class="settings-field">
+                <label>Transport</label>
+                <select id="decompilerModalLuacidTransport">
+                    <option value="auto" ${transport === 'auto' ? 'selected' : ''}>Automatic (WebSocket with a key)</option>
+                    <option value="http" ${transport === 'http' ? 'selected' : ''}>HTTP POST</option>
+                    <option value="websocket" ${transport === 'websocket' ? 'selected' : ''}>WebSocket</option>
+                </select>
+            </div>
+            <div class="settings-field">
+                <label>HTTP endpoint</label>
+                <input type="url" id="decompilerModalLuacidEndpoint" value="${escapeHtml(provider.endpoint || 'https://api.luacid.dev/decompile')}" placeholder="https://api.luacid.dev/decompile">
+            </div>
+            <div class="settings-field">
+                <label>Decompiler options JSON</label>
+                <textarea id="decompilerModalLuacidOptions" rows="7" placeholder='{"indent":"tab","type_annotations":"functions"}'>${escapeHtml(formatSettingsJson(options))}</textarea>
+            </div>
+        </div>
+        <div class="decompiler-modal-note">Options are sent as Luacid query parameters and WebSocket request options.</div>
+        <div class="decompiler-modal-footer">
+            <span class="decompiler-modal-note" data-provider-save-status>Saved automatically</span>
+            <button class="modal-btn modal-btn--cancel" type="button" data-action="close-provider-modal">Close</button>
+        </div>
+    `;
 }
 
 function oracleProviderModalHtml(provider) {
@@ -3313,6 +3406,31 @@ async function saveDecompilerProviderModal(options = {}) {
             if (!options.silent) showToast('Oracle options must be a JSON object', 'error');
             return false;
         }
+    } else if (id === 'luacid') {
+        const key = ($('decompilerModalLuacidKey')?.value || '').trim();
+        if (!key.startsWith('••')) {
+            provider.apiKey = key;
+            provider.apiKeySet = Boolean(key);
+            provider.apiKeyDirty = true;
+        }
+        provider.endpoint = endpointToMcpHostValue($('decompilerModalLuacidEndpoint')?.value || '');
+        const rawOptions = ($('decompilerModalLuacidOptions')?.value || '').trim();
+        try {
+            const parsed = rawOptions ? JSON.parse(rawOptions) : {};
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+            const transport = ['http', 'websocket'].includes($('decompilerModalLuacidTransport')?.value)
+                ? $('decompilerModalLuacidTransport').value
+                : 'auto';
+            provider.options = {
+                ...parsed,
+                transport,
+                transportExplicit: transport !== 'auto'
+            };
+        } catch {
+            setDecompilerProviderSaveStatus('Not saved: options must be a JSON object.', true);
+            if (!options.silent) showToast('Luacid options must be a JSON object', 'error');
+            return false;
+        }
     } else if (isCustomDecompilerProviderId(id)) {
         let custom;
         try {
@@ -3415,7 +3533,7 @@ $('settingsAddDecompilerMenu').addEventListener('click', (e) => {
     const id = item.dataset.addProvider;
     $('settingsAddDecompilerMenu').classList.remove('open');
     activateDecompilerProvider(id);
-    if (id === 'oracle' || id === 'fission' || id === 'shiny' || isCustomDecompilerProviderId(id)) {
+    if (id === 'oracle' || id === 'luacid' || id === 'fission' || id === 'shiny' || isCustomDecompilerProviderId(id)) {
         openDecompilerProviderModal(id);
     } else {
         scheduleDecompilerAutoSave();

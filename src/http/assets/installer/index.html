@@ -35,9 +35,12 @@
             <span class="sr-only">Search harnesses</span>
             <input id="harnessSearch" type="search" placeholder="Search supported harnesses..." autocomplete="off">
           </label>
-          <div class="filter-tabs" role="group" aria-label="Harness filters">
-            <button class="is-active" type="button" data-filter="detected">Detected</button>
-            <button type="button" data-filter="all">All supported</button>
+          <div class="section-tools">
+            <button class="section-manual" id="manualInstallButton" type="button">Manual install</button>
+            <div class="filter-tabs" role="group" aria-label="Harness filters">
+              <button class="is-active" type="button" data-filter="detected">Detected</button>
+              <button type="button" data-filter="all">All supported</button>
+            </div>
           </div>
         </div>
 
@@ -215,6 +218,23 @@
       </div>
     </div>
   </footer>
+
+  <div class="dialog-backdrop" id="manualInstallDialog" hidden>
+    <section class="restart-dialog manual-dialog" role="dialog" aria-modal="true" aria-labelledby="manualInstallDialogTitle">
+      <div class="dialog-header">
+        <h2 id="manualInstallDialogTitle">Manual install</h2>
+        <button class="dialog-close" id="closeManualInstallDialog" type="button" aria-label="Close manual install">×</button>
+      </div>
+      <p>Paste this into a client that is not listed, or if automatic install is unavailable.</p>
+      <div class="manual-recipe">
+        <div class="manual-recipe-head">
+          <span>mcpServers.json</span>
+          <button class="button button-ghost" id="copyManualInstallButton" type="button">Copy</button>
+        </div>
+        <pre class="manual-recipe-code" id="manualInstallRecipe"></pre>
+      </div>
+    </section>
+  </div>
 
   <div class="dialog-backdrop" id="restartDialog" hidden>
     <section class="restart-dialog" role="dialog" aria-modal="true" aria-labelledby="restartDialogTitle">

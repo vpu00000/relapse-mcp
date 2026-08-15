@@ -186,6 +186,7 @@ function renderAddClient() {
     else if (addClientMode === 'localNetwork') renderConnectorChoice('localNetwork');
     else if (addClientMode === 'authorizedMachines') renderAuthorizedMachines();
     else if (addClientMode === 'harness') renderHarnessInstaller();
+    else if (addClientMode === 'harnessManual') renderHarnessManualInstall();
     else renderAddClientIntro();
     updateAddClientModalHeader();
     syncAutoexecSelectAllUi();
@@ -232,6 +233,10 @@ function updateAddClientModalHeader() {
         desc = addClientHarnessState === 'success'
             ? 'Configuration installed'
             : 'Choose the local app that should load this MCP server.';
+    } else if (addClientMode === 'harnessManual') {
+        title = 'Manual install';
+        desc = 'mcpServers.json';
+        descMono = true;
     }
 
     addClientModalTitle.textContent = title;
@@ -259,6 +264,33 @@ function detectedHarnesses() {
         : [];
 }
 
+function harnessRecipeJson() {
+    return clientSetupData?.harnessRecipe?.json || '';
+}
+
+function renderHarnessManualButton() {
+    return '<button class="add-client-btn add-client-btn--ghost" data-action="show-harness-manual">Manual install</button>';
+}
+
+function renderHarnessManualInstall() {
+    const recipe = harnessRecipeJson();
+    addClientBody.innerHTML = '<div class="add-client-panel">' +
+        '<div class="add-client-top-row">' + renderBackButton() + '</div>' +
+        '<p class="add-client-hint">Paste this into a client that is not listed, or if automatic install is unavailable.</p>' +
+        '<div class="add-client-result">' +
+        '<div class="add-client-code-wrap">' +
+        '<div class="add-client-code-head">' +
+        '<span class="add-client-code-label">mcpServers.json</span>' +
+        '<button class="add-client-btn add-client-btn--ghost" data-action="copy-harness-recipe"' + (recipe ? '' : ' disabled') + '>Copy</button>' +
+        '</div>' +
+        '<pre class="add-client-code" id="addClientHarnessRecipe" data-copy-text="' + escapeHtml(recipe) + '">' +
+        escapeHtml(recipe || 'MCP recipe is unavailable.') +
+        '</pre>' +
+        '</div>' +
+        '</div>' +
+        '</div>';
+}
+
 function renderHarnessInstaller() {
     const harnesses = detectedHarnesses();
     const validIds = new Set(harnesses.map((harness) => harness.id));
@@ -282,8 +314,9 @@ function renderHarnessInstaller() {
         const error = clientSetupData?.harnessError;
         addClientBody.innerHTML = '<div class="add-client-panel">' +
             '<div class="add-client-status add-client-status--warn">' +
-            escapeHtml(error || 'No supported local harnesses were detected. Install a supported app first, then try again.') +
+            escapeHtml(error || 'No supported local harnesses were detected. Install a supported app first, or use a manual MCP config.') +
             '</div>' +
+            '<div class="add-client-actions">' + renderHarnessManualButton() + '</div>' +
             '</div>';
         return;
     }
@@ -312,6 +345,7 @@ function renderHarnessInstaller() {
         '<button class="add-client-btn add-client-btn--primary" data-action="install-harnesses"' +
         (installing || !selectedCount ? ' disabled' : '') + '>' +
         (installing ? 'Installing…' : 'Install selected') + '</button>' +
+        renderHarnessManualButton() +
         '</div>' +
         '</div>';
 }
@@ -753,7 +787,9 @@ if (addClientBody) {
             addClientAutoexecSelected = null;
             renderAddClient();
         } else if (action === 'setup-back') {
-            if (addClientMode === 'choices' || addClientMode === 'directBridge') {
+            if (addClientMode === 'harnessManual') {
+                addClientMode = 'harness';
+            } else if (addClientMode === 'choices' || addClientMode === 'directBridge') {
                 addClientMode = 'intro';
                 addClientGuideOpen = false;
             } else {
@@ -768,6 +804,13 @@ if (addClientBody) {
             const codeEl = $('addClientConnectorCode');
             const code = codeEl?.dataset.copyText || codeEl?.textContent || '';
             if (code) copyText(code, addClientTarget === 'mcp' ? 'MCP config diff' : 'Connector script');
+        } else if (action === 'show-harness-manual') {
+            addClientMode = 'harnessManual';
+            renderAddClient();
+        } else if (action === 'copy-harness-recipe') {
+            const codeEl = $('addClientHarnessRecipe');
+            const code = codeEl?.dataset.copyText || harnessRecipeJson();
+            if (code) copyText(code, 'MCP config');
         } else if (action === 'write-autoexec') {
             const bridgeUrl = btn.dataset.bridge || 'localhost:16384';
             const targets = getAutoexecTargets();

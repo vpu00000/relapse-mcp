@@ -66,6 +66,8 @@ test("dashboard harness detection skips slow per-process probes", async () => {
 
   assert.match(installer, /return Boolean\(findOnPath\(command\)\);/);
   assert.match(installer, /spawnSync\("tasklist\.exe"/);
+  assert.match(installer, /from "\.\.\/src\/shared\/local-addresses\.mjs"/);
+  assert.doesNotMatch(installer, /\["ip", "-4"\]/);
   assert.match(route, /"--skip-running-status"/);
 });
 
@@ -170,6 +172,9 @@ test("web installer preview serves harness and skill data and rejects mutations"
   assert.ok(Array.isArray(harnessData.connector.detectedTargets));
   assert.equal(typeof harnessData.backgroundService.manager, "string");
   assert.equal(typeof harnessData.backgroundService.configPath, "string");
+  assert.equal(harnessData.manualRecipe.serverName, "roblox-mcp");
+  assert.match(harnessData.manualRecipe.json, /"mcpServers"/);
+  assert.match(harnessData.manualRecipe.json, /"--server-name"/);
   assert.ok(harnessData.harnesses.some((harness) =>
     harness.id === "codex" && harness.skillAgent === "codex"
   ));
@@ -191,6 +196,11 @@ test("web installer presents harness, skill, connector, background, and install 
   assert.match(html, /data-screen="connector"/);
   assert.match(html, /data-screen="service"/);
   assert.match(html, /Skip harness setup/);
+  assert.match(html, /class="section-manual" id="manualInstallButton"/);
+  assert.match(html, /Manual install/);
+  assert.doesNotMatch(html, /footer-actions[\s\S]*id="manualInstallButton"/);
+  assert.match(html, /id="manualInstallDialog" hidden/);
+  assert.match(html, /mcpServers\.json/);
   assert.match(html, /These require restarts/);
   assert.match(html, /Install Roblox MCP skill/);
   assert.match(html, /Install the Roblox Connector/);
@@ -222,6 +232,9 @@ test("web installer presents harness, skill, connector, background, and install 
   assert.match(html, /Successfully installed!/);
   assert.match(html, /You can now close this page\./);
   assert.match(script, /state\.skipHarnessSetup = true/);
+  assert.match(script, /function openManualInstallDialog\(\)/);
+  assert.match(script, /function copyManualRecipe\(\)/);
+  assert.match(script, /state\.manualRecipe/);
   assert.match(script, /filter\(\(harness\) => harness\.running === true\)/);
   assert.match(script, /chooseRestartMode\("manual"\)/);
   assert.match(script, /chooseRestartMode\("automatic"\)/);
@@ -244,6 +257,9 @@ test("web installer presents harness, skill, connector, background, and install 
   assert.match(script, /harness\.manualRestartRequired/);
   assert.match(styles, /\.spinner\s*\{[\s\S]*?display: block;/);
   assert.match(styles, /\.status\.is-manual \{ color: var\(--amber\); \}/);
+  assert.match(styles, /\.button-ghost\s*\{/);
+  assert.match(styles, /\.section-manual\s*\{/);
+  assert.match(styles, /\.manual-recipe-code\s*\{/);
   assert.match(styles, /\.success-confetti\s*\{/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(styles, /animation: dialog-enter 220ms var\(--ease-out\)/);
@@ -728,13 +744,21 @@ test("dashboard add menu routes harness installs through the client setup API", 
   assert.match(html, /data-add-client-kind="mcp"/);
   assert.match(html, /data-add-client-kind="harness"/);
   assert.match(clientSetupJs, /action: 'install-harnesses'/);
+  assert.match(clientSetupJs, /show-harness-manual/);
+  assert.match(clientSetupJs, /copy-harness-recipe/);
+  assert.match(clientSetupJs, /mcpServers\.json/);
   assert.match(clientSetupJs, /includeHarnesses=/);
   assert.match(clientSetupJs, /includeTailscale=/);
   assert.match(clientSetupJs, /else renderAddClient\(\);/);
   assert.match(route, /"--install-only"/);
   assert.match(route, /includeTailscale \? getTailscaleStatus\(\)/);
+  assert.match(route, /getLocalAddresses/);
+  assert.match(route, /probeCli/);
+  assert.doesNotMatch(route, /\["ip", "-4"\]/);
   assert.match(route, /Promise\.all\(\[/);
   assert.match(route, /restartMessage/);
+  assert.match(route, /harnessRecipe/);
+  assert.match(route, /mcpServersRecipeJson/);
 });
 
 test("decompiler add menu shows one custom provider creation option", async () => {
@@ -752,6 +776,21 @@ test("decompiler add menu shows one custom provider creation option", async () =
     [...menuRenderer.matchAll(/data-add-custom-provider/g)].length,
     1
   );
+});
+
+test("dashboard exposes Luacid transport, options, and both key links", async () => {
+  const dashboardScript = await fs.readFile(
+    path.join(repoRoot, "src", "http", "assets", "dashboard", "dashboard.js"),
+    "utf8"
+  );
+
+  assert.match(dashboardScript, /https:\/\/luacid\.dev\/#pricing/);
+  assert.match(dashboardScript, /https:\/\/luacid\.dev\/getkey/);
+  assert.match(dashboardScript, /decompilerModalLuacidTransport/);
+  assert.match(dashboardScript, /decompilerModalLuacidOptions/);
+  assert.match(dashboardScript, /Automatic \(WebSocket with a key\)/);
+  assert.match(dashboardScript, /const LUACID_DEFAULT_OPTIONS = \{/);
+  assert.match(dashboardScript, /decompilerAdvancedOpen = false/);
 });
 
 test("every dashboard feature script referenced by HTML has a production route", async () => {

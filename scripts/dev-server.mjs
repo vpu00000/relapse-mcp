@@ -2,11 +2,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildLoaderSnippet, SERVER_PORT } from "../src/shared/connector-snippet.mjs";
 import { getAutoexecStatus } from "../src/shared/autoexec.mjs";
+import { getLocalLanIp } from "../src/shared/local-addresses.mjs";
+import { mcpServerEntry, mcpServersRecipeJson } from "../src/shared/mcp-recipe.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -162,12 +163,14 @@ let mockDashboardSettings = {
 };
 
 let mockOracleApiKey = "";
+let mockLuacidApiKey = "";
 const MOCK_SHINY_HOSTED_ENDPOINT = "https://medal.upio.dev/decompile";
 const MOCK_SHINY_LOCAL_ENDPOINT = "http://localhost:3000/luau/decompile";
 const MOCK_PROVIDER_TIMEOUTS_MS = {
   builtin: 8000,
   luaexpert: 10000,
   shiny: 6000,
+  luacid: 15000,
   oracle: 15000,
   konstant: 10000,
   fission: 6000,
@@ -183,7 +186,7 @@ const MOCK_DECOMPILER_RUNTIME = {
   providerTimeoutsMs: MOCK_PROVIDER_TIMEOUTS_MS,
 };
 let mockDecompilerSettings = {
-  providerOrder: ["builtin", "luaexpert", "shiny", "oracle", "konstant", "fission"],
+  providerOrder: ["builtin", "luaexpert", "shiny", "luacid", "oracle", "konstant", "fission"],
   providers: {
     builtin: {
       enabled: true,
@@ -206,6 +209,14 @@ let mockDecompilerSettings = {
       endpoint: MOCK_SHINY_HOSTED_ENDPOINT,
       version: null,
       options: { mode: "hosted" },
+      apiKeySet: false,
+      apiKeyMasked: "",
+    },
+    luacid: {
+      enabled: false,
+      endpoint: "https://api.luacid.dev/decompile",
+      version: null,
+      options: { transport: "auto", transportExplicit: false },
       apiKeySet: false,
       apiKeyMasked: "",
     },
@@ -238,6 +249,7 @@ let mockDecompilerSettings = {
     { id: "builtin", label: "Built-in", local: true, requiresApiKey: false },
     { id: "luaexpert", label: "lua.expert", local: false, requiresApiKey: false },
     { id: "shiny", label: "Shiny", local: false, requiresApiKey: false },
+    { id: "luacid", label: "Luacid", local: false, requiresApiKey: false },
     { id: "oracle", label: "Oracle", local: false, requiresApiKey: true },
     { id: "konstant", label: "Konstant", local: false, requiresApiKey: false },
     { id: "fission", label: "Fission", local: true, requiresApiKey: false },
@@ -314,6 +326,9 @@ function mockDecompilerProviderIssue(id, provider) {
   if (id === "oracle" && !provider.apiKeySet) {
     return "Oracle: Authorization required. Add an Oracle API key before this provider can run.";
   }
+  if (id === "luacid" && provider.options?.transport === "websocket" && !provider.apiKeySet) {
+    return "Luacid: A paid API key is required for WebSocket decompilation.";
+  }
   if (id !== "builtin" && typeof provider.endpoint === "string" && provider.endpoint.trim() === "") {
     return `${id}: Endpoint required. Open provider settings and add a URL.`;
   }
@@ -336,17 +351,6 @@ function readArg(name) {
   const index = args.indexOf(name);
   if (index === -1) return null;
   return args[index + 1] || null;
-}
-
-function getLocalLanIp() {
-  for (const entries of Object.values(os.networkInterfaces())) {
-    for (const entry of entries || []) {
-      if (entry.family === "IPv4" && !entry.internal && !entry.address.startsWith("169.254.")) {
-        return entry.address;
-      }
-    }
-  }
-  return null;
 }
 
 function connector(bridgeUrl) {
@@ -584,6 +588,11 @@ async function handleApi(req, res, url) {
       autoexec: getAutoexecStatus(),
       harnesses: mockHarnesses,
       harnessError: null,
+      harnessRecipe: {
+        serverName: "roblox-mcp",
+        serverEntry: mcpServerEntry(repoRoot),
+        json: mcpServersRecipeJson(mcpServerEntry(repoRoot), "roblox-mcp"),
+      },
     });
     return true;
   }
@@ -718,7 +727,7 @@ async function handleApi(req, res, url) {
           {
             enabled: provider.enabled,
             endpoint: provider.endpoint,
-            apiKey: id === "oracle" ? mockOracleApiKey : "",
+            apiKey: id === "oracle" ? mockOracleApiKey : id === "luacid" ? mockLuacidApiKey : "",
             version: provider.version,
             options: provider.options,
           },
@@ -821,6 +830,7 @@ async function handleApi(req, res, url) {
       const body = await readJson(req);
       const nextSettings = cloneMockDecompilerSettings();
       let nextOracleApiKey = mockOracleApiKey;
+      let nextLuacidApiKey = mockLuacidApiKey;
       const incomingProviderIds = body.providers && typeof body.providers === "object"
         ? Object.keys(body.providers)
         : [];
@@ -863,6 +873,13 @@ async function handleApi(req, res, url) {
               ? `${nextOracleApiKey.slice(0, 3)}...${nextOracleApiKey.slice(-4)}`
               : "";
           }
+          if (id === "luacid" && typeof provider.apiKey === "string") {
+            nextLuacidApiKey = provider.apiKey;
+            nextSettings.providers.luacid.apiKeySet = nextLuacidApiKey.length > 0;
+            nextSettings.providers.luacid.apiKeyMasked = nextLuacidApiKey
+              ? `${nextLuacidApiKey.slice(0, 3)}...${nextLuacidApiKey.slice(-4)}`
+              : "";
+          }
         }
       }
       if (body.runtime && typeof body.runtime === "object" && !Array.isArray(body.runtime)) {
@@ -875,6 +892,7 @@ async function handleApi(req, res, url) {
       }
       mockDecompilerSettings = nextSettings;
       mockOracleApiKey = nextOracleApiKey;
+      mockLuacidApiKey = nextLuacidApiKey;
       json(res, 200, mockDecompilerSettings);
       return true;
     }

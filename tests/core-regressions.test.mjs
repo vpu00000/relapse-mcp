@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
+import { WebSocketServer } from "ws";
 
 import {
   clearScriptSourceIndex,
@@ -562,6 +563,71 @@ test("an explicit empty provider API key clears the stored fallback", () => {
   }, fallback);
 
   assert.equal(settings.providers.oracle.apiKey, "");
+});
+
+test("Luacid HTTP sends raw bytecode, API options, and an optional bearer key", async (t) => {
+  const bytecode = Buffer.from("luacid-bytecode");
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(String(url), "https://api.luacid.dev/decompile?indent=2&prefer_const=true");
+    assert.equal(init.headers.Authorization, "Bearer paid-key");
+    assert.equal(init.headers["Content-Type"], "application/octet-stream");
+    assert.deepEqual(Buffer.from(init.body), bytecode);
+    return new Response("return 'luacid-http'", { status: 200 });
+  });
+  const settings = normalizeDecompilerSettingsInput({
+    providerOrder: ["luacid"],
+    providers: {
+      builtin: { enabled: false }, luaexpert: { enabled: false }, shiny: { enabled: false },
+      luacid: {
+        enabled: true,
+        apiKey: "paid-key",
+        options: { transport: "http", transportExplicit: true, indent: 2, prefer_const: true },
+      },
+      oracle: { enabled: false }, konstant: { enabled: false }, fission: { enabled: false }, custom: { enabled: false },
+    },
+  });
+
+  const result = await decompileBytecode(settings, { bytecodeBase64: bytecode.toString("base64") });
+  assert.equal(result.ok, true);
+  assert.equal(result.providerId, "luacid");
+  assert.equal(result.source, "-- Decompiled with Luacid\nreturn 'luacid-http'");
+});
+
+test("Luacid automatically uses WebSocket when an API key is configured", async (t) => {
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise((resolve) => server.once("listening", resolve));
+  t.after(() => server.close());
+  const port = server.address().port;
+  server.once("connection", (socket, request) => {
+    assert.equal(request.headers.authorization, "Bearer websocket-key");
+    socket.once("message", (raw) => {
+      const requestBody = JSON.parse(raw.toString());
+      assert.equal(requestBody.id, "decompile");
+      assert.equal(requestBody.encoded_bytecode, Buffer.from("ws-bytecode").toString("base64"));
+      assert.equal(requestBody.indent, "tab");
+      socket.send(JSON.stringify({ id: requestBody.id, decompilation: "return 'luacid-ws'" }));
+    });
+  });
+  const settings = normalizeDecompilerSettingsInput({
+    providerOrder: ["luacid"],
+    providers: {
+      builtin: { enabled: false }, luaexpert: { enabled: false }, shiny: { enabled: false },
+      luacid: {
+        enabled: true,
+        endpoint: `http://127.0.0.1:${port}/decompile`,
+        apiKey: "websocket-key",
+        options: { transport: "auto", indent: "tab" },
+      },
+      oracle: { enabled: false }, konstant: { enabled: false }, fission: { enabled: false }, custom: { enabled: false },
+    },
+  });
+
+  const result = await decompileBytecode(settings, {
+    bytecodeBase64: Buffer.from("ws-bytecode").toString("base64"),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.providerId, "luacid");
+  assert.equal(result.source, "-- Decompiled with Luacid\nreturn 'luacid-ws'");
 });
 
 test("multiple custom decompiler providers fall through in their configured order", async (t) => {

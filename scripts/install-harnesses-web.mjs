@@ -13,6 +13,7 @@ import {
   installRobloxMcpSkill,
   skillAgentForHarness,
 } from "../src/shared/skill-install.mjs";
+import { mcpServerEntry, mcpServersRecipeJson } from "../src/shared/mcp-recipe.mjs";
 
 const execFileAsync = promisify(execFile);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -72,6 +73,14 @@ const server = http.createServer(async (request, response) => {
         },
         connector: connectorPreview(),
         backgroundService: getBackgroundServicePlan(repoRoot),
+        manualRecipe: {
+          serverName: process.env.ROBLOX_MCP_SERVER_NAME || "roblox-mcp",
+          serverEntry: mcpServerEntry(repoRoot),
+          json: mcpServersRecipeJson(
+            mcpServerEntry(repoRoot),
+            process.env.ROBLOX_MCP_SERVER_NAME || "roblox-mcp"
+          ),
+        },
       });
       return;
     }

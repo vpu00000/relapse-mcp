@@ -42,6 +42,7 @@
     requiresInstallToken: false,
     installing: false,
     installStatus: null,
+    manualRecipe: null,
   };
 
   const elements = {
@@ -52,6 +53,11 @@
     count: document.getElementById("selectionCount"),
     continueButton: document.getElementById("continueButton"),
     skipHarnessButton: document.getElementById("skipHarnessButton"),
+    manualInstallButton: document.getElementById("manualInstallButton"),
+    manualInstallDialog: document.getElementById("manualInstallDialog"),
+    closeManualInstallDialog: document.getElementById("closeManualInstallDialog"),
+    copyManualInstallButton: document.getElementById("copyManualInstallButton"),
+    manualInstallRecipe: document.getElementById("manualInstallRecipe"),
     backButton: document.getElementById("backButton"),
     installSkillCheckbox: document.getElementById("installSkillCheckbox"),
     installConnectorCheckbox: document.getElementById("installConnectorCheckbox"),
@@ -198,9 +204,16 @@
     if (event.key !== "Escape") return;
     if (!elements.installDialog.hidden && !state.installing) {
       closeInstallDialog({ animate: false });
-    } else if (!elements.serviceDialog.hidden) closeServiceDialog({ animate: false });
+    } else if (!elements.manualInstallDialog.hidden) closeManualInstallDialog({ animate: false });
+    else if (!elements.serviceDialog.hidden) closeServiceDialog({ animate: false });
     else if (!elements.restartDialog.hidden) closeRestartDialog({ animate: false });
   });
+  elements.manualInstallButton.addEventListener("click", () => openManualInstallDialog());
+  elements.closeManualInstallDialog.addEventListener("click", () => closeManualInstallDialog());
+  elements.manualInstallDialog.addEventListener("click", (event) => {
+    if (event.target === elements.manualInstallDialog) closeManualInstallDialog();
+  });
+  elements.copyManualInstallButton.addEventListener("click", () => copyManualRecipe());
   elements.manualRestartButton.addEventListener("click", () => chooseRestartMode("manual"));
   elements.automaticRestartButton.addEventListener("click", () => chooseRestartMode("automatic"));
 
@@ -238,6 +251,10 @@
       state.backgroundService =
         data.backgroundService && typeof data.backgroundService === "object"
           ? data.backgroundService
+          : null;
+      state.manualRecipe =
+        data.manualRecipe && typeof data.manualRecipe === "object" && typeof data.manualRecipe.json === "string"
+          ? data.manualRecipe
           : null;
       for (const harness of state.harnesses) {
         if (harness.detected) state.selected.add(harness.id);
@@ -427,6 +444,53 @@
 
     elements.restartDialog.classList.add("is-closing");
     window.setTimeout(finish, 140);
+  }
+
+  function openManualInstallDialog() {
+    const recipe = state.manualRecipe?.json || "";
+    elements.manualInstallRecipe.textContent = recipe || "MCP recipe is unavailable.";
+    elements.copyManualInstallButton.disabled = !recipe;
+    elements.manualInstallDialog.classList.remove("is-closing");
+    elements.manualInstallDialog.hidden = false;
+    elements.copyManualInstallButton.focus();
+  }
+
+  function closeManualInstallDialog({ animate = true } = {}) {
+    if (
+      elements.manualInstallDialog.hidden
+      || elements.manualInstallDialog.classList.contains("is-closing")
+    ) return;
+
+    const finish = () => {
+      elements.manualInstallDialog.hidden = true;
+      elements.manualInstallDialog.classList.remove("is-closing");
+      elements.manualInstallButton.focus();
+    };
+
+    if (!animate || reducedMotion.matches) {
+      finish();
+      return;
+    }
+
+    elements.manualInstallDialog.classList.add("is-closing");
+    window.setTimeout(finish, 140);
+  }
+
+  async function copyManualRecipe() {
+    const recipe = state.manualRecipe?.json || "";
+    if (!recipe) return;
+    try {
+      await navigator.clipboard.writeText(recipe);
+      elements.copyManualInstallButton.textContent = "Copied";
+      window.setTimeout(() => {
+        elements.copyManualInstallButton.textContent = "Copy";
+      }, 1200);
+    } catch {
+      elements.copyManualInstallButton.textContent = "Copy failed";
+      window.setTimeout(() => {
+        elements.copyManualInstallButton.textContent = "Copy";
+      }, 1200);
+    }
   }
 
   function openServiceDialog() {
