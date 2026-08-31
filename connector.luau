@@ -2559,51 +2559,53 @@ local function ProcessLogs(l,m)
 local n={}
 
 for o,p in l do
-if typeof(o)~="Instance"then continue end
+local q=p.Instance
+if typeof(q)~="Instance"then continue end
 if#n>=h then break end
 
-local q=""
 local r=""
+local s=""
 pcall(function()
-q=o.Name
-r=o.ClassName
+r=q.Name
+s=q.ClassName
 end)
 
 
-if k and not string.find(string.lower(q),string.lower(g),1,true)then
+if k and not string.find(string.lower(r),string.lower(g),1,true)then
 continue
 end
 
 
-local s={}
-local t=#p.Calls
-local u=math.max(1,t-i+1)
+local t={}
+local u=#p.Calls
+local v=math.max(1,u-i+1)
 
 if not j then
-for v=u,t do
-local w=p.Calls[v]
-if not w then continue end
+for w=v,u do
+local x=p.Calls[w]
+if not x then continue end
 
-table.insert(s,{
-Index=v,
-Arguments=w.Arguments,
-Origin=w.Origin,
-IsExecutor=w.IsExecutor or false,
-IsActor=w.IsActor or false,
-Line=w.Line,
+table.insert(t,{
+Index=w,
+Arguments=x.Arguments,
+Origin=x.Origin,
+IsExecutor=x.IsExecutor or false,
+IsActor=x.IsActor or false,
+Line=x.Line,
 })
 end
 end
 
 table.insert(n,{
-RemoteName=q,
-RemoteClass=r,
+RemoteName=r,
+RemoteClass=s,
 Direction=m,
-Method=p.Method,
-TotalCalls=t,
+Method=p.Method
+or(((e.shared.FunctionForClasses or{})[m])or{})[s],
+TotalCalls=u,
 Ignored=p.Ignored,
 Blocked=p.Blocked,
-RecentCalls=if j then nil else s,
+RecentCalls=if j then nil else t,
 })
 end
 
@@ -2672,12 +2674,13 @@ local i=e.shared.Logs[g]
 assert(i,"Invalid direction: "..tostring(g))
 
 for j,k in i do
-if typeof(j)~="Instance"then continue end
+local l=k.Instance
+if typeof(l)~="Instance"then continue end
 
-local l=""
-pcall(function()l=j.Name end)
+local m=""
+pcall(function()m=l.Name end)
 
-if l==f then
+if m==f then
 if h and not k.Blocked then
 k:Block()
 elseif not h and k.Blocked then
@@ -2707,12 +2710,13 @@ local i=e.shared.Logs[g]
 assert(i,"Invalid direction: "..tostring(g))
 
 for j,k in i do
-if typeof(j)~="Instance"then continue end
+local l=k.Instance
+if typeof(l)~="Instance"then continue end
 
-local l=""
-pcall(function()l=j.Name end)
+local m=""
+pcall(function()m=l.Name end)
 
-if l==f then
+if m==f then
 if h and not k.Ignored then
 k:Ignore()
 elseif not h and k.Ignored then

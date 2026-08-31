@@ -44,7 +44,8 @@ return function(_context, Bridge)
         local function ProcessLogs(logTable, directionLabel)
             local results = {}
 
-            for instance, log in logTable do
+            for _, log in logTable do
+                local instance = log.Instance
                 if typeof(instance) ~= "Instance" then continue end
                 if #results >= limit then break end
 
@@ -85,7 +86,8 @@ return function(_context, Bridge)
                     RemoteName = remoteName,
                     RemoteClass = remoteClass,
                     Direction = directionLabel,
-                    Method = log.Method,
+                    Method = log.Method
+                        or (((Cobalt.shared.FunctionForClasses or {})[directionLabel]) or {})[remoteClass],
                     TotalCalls = totalCalls,
                     Ignored = log.Ignored,
                     Blocked = log.Blocked,

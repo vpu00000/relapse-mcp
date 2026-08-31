@@ -22,7 +22,8 @@ return function(_context, Bridge)
         local logTable = Cobalt.shared.Logs[direction]
         assert(logTable, "Invalid direction: " .. tostring(direction))
 
-        for instance, log in logTable do
+        for _, log in logTable do
+            local instance = log.Instance
             if typeof(instance) ~= "Instance" then continue end
 
             local name = ""
@@ -57,7 +58,8 @@ return function(_context, Bridge)
         local logTable = Cobalt.shared.Logs[direction]
         assert(logTable, "Invalid direction: " .. tostring(direction))
 
-        for instance, log in logTable do
+        for _, log in logTable do
+            local instance = log.Instance
             if typeof(instance) ~= "Instance" then continue end
 
             local name = ""

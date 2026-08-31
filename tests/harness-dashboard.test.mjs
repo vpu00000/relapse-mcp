@@ -793,6 +793,18 @@ test("dashboard exposes Luacid transport, options, and both key links", async ()
   assert.match(dashboardScript, /decompilerAdvancedOpen = false/);
 });
 
+test("remote spy reads Cobalt remotes from log values instead of debug-id keys", async () => {
+  const [logs, control] = await Promise.all([
+    fs.readFile(path.join(repoRoot, "connector-src", "bridge", "handlers", "remote-spy", "logs.luau"), "utf8"),
+    fs.readFile(path.join(repoRoot, "connector-src", "bridge", "handlers", "remote-spy", "control.luau"), "utf8"),
+  ]);
+
+  assert.match(logs, /for _, log in logTable do\s+local instance = log\.Instance/);
+  assert.match(logs, /Cobalt\.shared\.FunctionForClasses or \{\}/);
+  assert.equal([...control.matchAll(/for _, log in logTable do\s+local instance = log\.Instance/g)].length, 2);
+  assert.doesNotMatch(`${logs}\n${control}`, /for instance, log in logTable do/);
+});
+
 test("every dashboard feature script referenced by HTML has a production route", async () => {
   const html = await fs.readFile(
     path.join(repoRoot, "src", "http", "assets", "dashboard", "index.html"),
