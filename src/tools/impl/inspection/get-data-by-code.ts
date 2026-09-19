@@ -1,10 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { describeResponse, sendAndWait, sourceWithThreadContext } from "../../factory.js";
 import { maxOutputCharsSchema, threadContextSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "get-data-by-code",
     {
       title: "Get data by code",

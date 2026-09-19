@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import crypto from "crypto";
 import { WebSocket } from "ws";
 import {
@@ -6,12 +7,13 @@ import {
   getRelaySocket,
   GetResponseOfIdFromClient,
 } from "../../../bridge/handlers/shared/communication.js";
-import { formatActiveClientListForTool } from "../../../bridge/handlers/shared/registry.js";
+import { formatActiveClientListForTool, getActiveClientId } from "../../../bridge/handlers/shared/registry.js";
 import { toolTextResponse } from "../../factory.js";
 import { NO_CLIENT_ERROR } from "../../errors.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "list-clients",
     {
       title: "List connected Roblox clients",
@@ -23,7 +25,7 @@ export default function register(server: McpServer): void {
         const id = crypto.randomUUID();
         const socket = getRelaySocket();
         if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ id, type: "list-clients" }));
+          socket.send(JSON.stringify({ id, type: "list-clients", targetClientId: getActiveClientId() }));
           const response = await GetResponseOfIdFromClient(id);
           if (response?.error || !response?.output) {
             return toolTextResponse(response?.error ?? "Failed to list clients.", {}, true);

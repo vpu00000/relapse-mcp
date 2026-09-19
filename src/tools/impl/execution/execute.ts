@@ -1,10 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { sendFireAndForget, sourceWithThreadContext } from "../../factory.js";
 import { threadContextSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "execute",
     {
       title: "Execute Code in the Roblox Game Client",

@@ -1,9 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { describeResponse, sendAndWait } from "../../factory.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "type-text-box",
     {
       title: "Type into a TextBox",

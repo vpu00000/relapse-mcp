@@ -8,7 +8,6 @@ import {
 import {
   formatActiveClientListForTool,
   resolveTargetClient,
-  setActiveClientId,
 } from "../../bridge/handlers/shared/registry.js";
 
 interface RelayMessage {
@@ -26,12 +25,18 @@ export function WS(ws: WebSocket): void {
     try {
       const message: RelayMessage = JSON.parse(rawData.toString());
 
+      if (message.targetClientId !== undefined &&
+          (typeof message.targetClientId !== "string" || !message.targetClientId.trim())) {
+        if (message.id) ws.send(JSON.stringify({ id: message.id, error: "Invalid client ID." }));
+        return;
+      }
+
       // Relay-level request handled directly by the primary.
       if (message.type === "list-clients" && message.id) {
         ws.send(
           JSON.stringify({
             id: message.id,
-            output: formatActiveClientListForTool(),
+            output: formatActiveClientListForTool(message.targetClientId ?? ""),
           })
         );
         return;
@@ -40,7 +45,7 @@ export function WS(ws: WebSocket): void {
       if (message.type === "set-active-client" && message.id) {
         const requestedClientId =
           typeof message.targetClientId === "string" ? message.targetClientId : "";
-        const target = resolveTargetClient(requestedClientId);
+        const target = requestedClientId.trim() ? resolveTargetClient(requestedClientId) : null;
         if (!target) {
           ws.send(
             JSON.stringify({
@@ -52,7 +57,7 @@ export function WS(ws: WebSocket): void {
           return;
         }
 
-        setActiveClientId(target.clientId);
+        // The secondary owns its session default and sends it on each request.
         ws.send(
           JSON.stringify({
             id: message.id,

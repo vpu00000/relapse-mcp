@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { clientStampPrefix, toolTextResponse, type ToolTextResponse } from "../../factory.js";
 import { isSecondaryRelay, relayToolToApi } from "../../factory.js";
@@ -135,7 +136,8 @@ function formatResults(
 }
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "script-grep",
     {
       title: "Grep across all scripts in the game",

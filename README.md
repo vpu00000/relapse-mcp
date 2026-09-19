@@ -26,6 +26,16 @@ Use it to see connected Roblox clients, inspect scripts, run tools, view server 
 - **Screenshot** — Capture Roblox window screenshots (Windows only).
 - **Multi-Client** — Connect multiple Roblox clients at once.
 
+### Targeting multiple clients
+
+Call `list-clients` to get connected client IDs, then pass `clientId` on Roblox tool calls, for example:
+
+```json
+{"name":"get-game-info","arguments":{"clientId":"<client ID>"}}
+```
+
+Calls targeting different clients can run concurrently. `set-active-client` sets a default for your MCP session only; an explicit `clientId` overrides it for one call without changing that default. A disconnected or invalid target returns an error instead of switching to another client. Single-client use still works without selecting a target. OS window tools use `pid` rather than `clientId`.
+
 ## Tutorial
 
 [![roblox-executor-mcp installation guide](http://img.youtube.com/vi/Tcy5RNf1TRc/0.jpg)](https://youtube.com/watch?v=Tcy5RNf1TRc)

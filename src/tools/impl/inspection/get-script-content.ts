@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { clientStampPrefix, sendAndWait, toolTextResponse } from "../../factory.js";
 import { isSecondaryRelay, relayToolToApi } from "../../factory.js";
@@ -53,7 +54,8 @@ function findStoredScript(
 }
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "get-script-content",
     {
       title: "Get the content of a script in the Roblox Game Client",

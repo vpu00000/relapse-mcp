@@ -1,10 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { sendAndWait } from "../../factory.js";
 import { maxOutputCharsSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "get-console-output",
     {
       title: "Get the roblox developer console output from the Roblox Game Client",

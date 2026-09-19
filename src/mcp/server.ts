@@ -5,7 +5,7 @@ import { registerAllTools } from "../tools/index.js";
 
 const INSTRUCTIONS = [
   "Roblox executor MCP server. Recommended workflow to keep results small and accurate:",
-  "1. If multiple clients may be connected, call list-clients then set-active-client before anything else.",
+  "1. Call list-clients to discover clients. Pass clientId on each Roblox tool call for concurrent multi-client work; set-active-client sets only this MCP session's default. OS window tools use pid instead.",
   "2. Explore structure cheaply first: get-descendants-tree (summaryOnly) or search-instances with a tight selector and low limit; widen only when needed.",
   "3. Find code with script-grep (exact identifiers/regex) or semantic-search-scripts (behavior); then read just the relevant range with get-script-content (use startLine/endLine).",
   "4. Use get-data-by-code only for small, targeted value probes — prefer the specialized inspection tools above, and have the returned code return compact values, never whole instances or large tables.",

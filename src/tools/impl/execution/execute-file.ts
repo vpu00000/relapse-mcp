@@ -1,11 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import fs from "fs";
 import { z } from "zod";
 import { sendFireAndForget, sourceWithThreadContext, toolTextResponse } from "../../factory.js";
 import { threadContextSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "execute-file",
     {
       title: "Execute a Luau file in the Roblox Game Client",

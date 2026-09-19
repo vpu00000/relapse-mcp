@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import crypto from "crypto";
 import { WebSocket } from "ws";
 import { z } from "zod";
@@ -12,15 +13,19 @@ import { toolTextResponse } from "../../factory.js";
 import { NO_CLIENT_ERROR } from "../../errors.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "set-active-client",
     {
       title: "Set active Roblox client",
       description:
-        "Route future Roblox tool calls to the specified connected client. Use list-clients first if you need available clientIds.",
+        "Set the default Roblox client for this MCP session. For concurrent multi-client work, pass clientId on each tool call instead. Use list-clients to get IDs.",
       inputSchema: z.object({
         clientId: z
           .string()
+          .trim()
+          .min(1)
+          .max(160)
           .describe(
             "The client ID to set as active. Use list-clients to get available client IDs."
           ),

@@ -1,10 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { describeResponse, sendAndWait } from "../../factory.js";
 import { maxOutputCharsSchema } from "../../schemas.js";
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "search-instances",
     {
       title: "Search for instances in the game",

@@ -8,7 +8,7 @@ import type {
   RobloxResponse,
   ResponseResolver,
 } from "../../types.js";
-import { getActiveClients, resolveTargetClient } from "./registry.js";
+import { getActiveClientId, resolveTargetClient } from "./registry.js";
 
 const MAX_PENDING_HTTP_COMMANDS = 100;
 
@@ -116,7 +116,7 @@ export function SendArbitraryDataToClient(
   type: string,
   data: Record<string, unknown>,
   id?: string,
-  clientId?: string
+  clientId: string | undefined = getActiveClientId()
 ): DispatchResult {
   if (instanceRole === "secondary") {
     if (!relaySocket || relaySocket.readyState !== WebSocket.OPEN) return null;
@@ -131,29 +131,14 @@ export function SendArbitraryDataToClient(
     return requestId;
   }
 
-  // Primary mode
-  if (clientId !== undefined) {
-    const target = resolveTargetClient(clientId);
-    if (!target) return "INVALID_CLIENT";
-
-    const requestId = id ?? crypto.randomUUID();
-    const message = { id: requestId, ...data, type };
-    requestToClientId.set(requestId, target.clientId);
-    SendToClient(target, JSON.stringify(message));
-    return requestId;
-  }
-
-  // No clientId: broadcast to all active clients (most recent wins for routing)
-  const activeClients = getActiveClients();
-  if (activeClients.length === 0) return null;
+  const target = resolveTargetClient(clientId);
+  if (!target) return clientId !== undefined ? "INVALID_CLIENT" : null;
 
   const requestId = id ?? crypto.randomUUID();
   const message = { id: requestId, ...data, type };
 
-  for (const target of activeClients) {
-    requestToClientId.set(requestId, target.clientId);
-    SendToClient(target, JSON.stringify(message));
-  }
+  requestToClientId.set(requestId, target.clientId);
+  SendToClient(target, JSON.stringify(message));
 
   return requestId;
 }

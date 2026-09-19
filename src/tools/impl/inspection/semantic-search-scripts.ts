@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { loadSemanticSettings, validateSemanticSettings } from "../../../semantic/settings.js";
 import {
@@ -55,7 +56,8 @@ function formatSemanticResults(
 }
 
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "semantic-search-scripts",
     {
       title: "Semantically search scripts in the game",

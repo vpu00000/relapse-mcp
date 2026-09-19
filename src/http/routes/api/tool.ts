@@ -6,7 +6,7 @@ import {
 import {
   getActiveClients,
   resolveTargetClient,
-  setActiveClientId,
+  getActiveClientId,
 } from "../../../bridge/handlers/shared/registry.js";
 import {
   getScriptSourceIndex,
@@ -127,11 +127,11 @@ export async function POST(req: IncomingMessage, res: ServerResponse): Promise<v
     if (!type) return jsonErr(res, "Missing 'type' field.");
 
     // Resolve target client
-    const target = resolveTargetClient(clientId);
+    if (clientId !== undefined && (typeof clientId !== "string" || !clientId.trim())) {
+      return jsonErr(res, "Invalid client ID.");
+    }
+    const target = resolveTargetClient(clientId ?? getActiveClientId());
     if (!target) return jsonErr(res, "No active client found.");
-
-    // Set active client for this request
-    if (clientId) setActiveClientId(target.clientId);
 
     // ── Script Grep (server-side search) ──────────────────────────────────────
     if (type === "script-grep") {

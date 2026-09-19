@@ -1,11 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { describeResponse, sendAndWait } from "../../factory.js";
 import { maxOutputCharsSchema } from "../../schemas.js";
 
 const directionSchema = z.enum(["Incoming", "Outgoing"]);
 
-const inputSchema = z.discriminatedUnion("operation", [
+const operationSchema = z.discriminatedUnion("operation", [
   z.object({
     operation: z.literal("list"),
     direction: z
@@ -43,8 +44,17 @@ const inputSchema = z.discriminatedUnion("operation", [
   }),
 ]);
 
+// MCP advertises object schemas; keep operation-specific validation separately.
+const inputSchema = z.object({
+  ...operationSchema.options[0].shape,
+  operation: z.enum(["list", "clear", "status", "block", "unblock", "ignore", "unignore"]),
+  direction: z.enum(["Incoming", "Outgoing", "Both"]).optional(),
+  remoteName: z.string().describe("Required for block/unblock/ignore/unignore; exact remote name.").optional(),
+});
+
 export default function register(server: McpServer): void {
-  server.registerTool(
+  registerClientTool(
+    server,
     "remote-spy",
     {
       title: "Inspect and control Cobalt remote spy",
@@ -52,7 +62,8 @@ export default function register(server: McpServer): void {
         "Inspect and control Cobalt remote-spy state. Cobalt loads automatically. Use operation=list before changing a remote. block/unblock prevents or permits matching calls; ignore/unignore only changes whether matching calls are logged. Remote names are exact for state changes; list.nameFilter is a case-insensitive substring filter. Start with summaryOnly=true and small limits, then request arguments only for a narrowed remote.",
       inputSchema,
     },
-    async (input) => {
+    async (args) => {
+      const input = operationSchema.parse(args);
       const maxOutputChars = input.operation === "list" ? input.maxOutputChars : undefined;
       return sendAndWait({
         type: "remote-spy",

@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { WebSocket } from "ws";
 import { HTTP_POLL_TIMEOUT } from "../../../config.js";
 import type { RobloxClient } from "../../types.js";
@@ -11,6 +12,23 @@ const HTTP_CLIENT_RETENTION_MS = HTTP_POLL_TIMEOUT * 2;
 
 let activeClientId: string | undefined = undefined;
 let activeClientIsRemote = false;
+
+export interface ClientSelection {
+  clientId?: string;
+}
+
+const toolClientContext = new AsyncLocalStorage<{
+  clientId?: string;
+  selection: ClientSelection;
+}>();
+
+export function withClientSelection<T>(
+  selection: ClientSelection,
+  clientId: string | undefined,
+  callback: () => T
+): T {
+  return toolClientContext.run({ selection, clientId }, callback);
+}
 
 function isClientActive(entry: RobloxClient): boolean {
   if (entry.transport === "ws") {
@@ -63,6 +81,8 @@ function findUniqueClientByIdOrPrefix(clientId: string): RobloxClient | undefine
 }
 
 export function getActiveClientId(): string | undefined {
+  const context = toolClientContext.getStore();
+  if (context) return context.clientId;
   if (!activeClientId) return undefined;
   if (activeClientIsRemote) return activeClientId;
   const active = clientRegistry.get(activeClientId);
@@ -75,6 +95,12 @@ export function getActiveClientId(): string | undefined {
 }
 
 export function setActiveClientId(clientId: string, options: { remote?: boolean } = {}): void {
+  const context = toolClientContext.getStore();
+  if (context) {
+    context.selection.clientId = clientId;
+    context.clientId = clientId;
+    return;
+  }
   activeClientId = clientId;
   activeClientIsRemote = options.remote === true;
 }
@@ -176,15 +202,13 @@ export function getActiveClients(): RobloxClient[] {
   return active;
 }
 
-export function formatActiveClientListForTool(): string {
+export function formatActiveClientListForTool(selectedClientId = getActiveClientId()): string {
   const active = getActiveClients();
   if (active.length === 0) {
     return "No Roblox clients are currently connected.";
   }
 
   // Compact one-line-per-client format to minimize tokens vs pretty JSON.
-  const selectedClientId = getActiveClientId();
-
   return active
     .map((c) => {
       const marker = c.clientId === selectedClientId ? "* " : "  ";
