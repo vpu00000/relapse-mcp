@@ -81,6 +81,7 @@ function ScriptMappingState:Reset(clientId, session)
     self.disabled = false
     self.clientId = clientId
     self.scriptHashByDebugId = {}
+    self.sourceCacheByHash = {}
     self.sourceCacheCheckedByHash = {}
     self.initialScanRunning = false
     self.initialScanFinished = false

@@ -14,6 +14,7 @@ local firstSession = UploadSession.new("first", 100, 1)
 local equalTimestampSession = UploadSession.new("same-time", 100, 2)
 assert(equalTimestampSession.startedAt > firstSession.startedAt, "session epochs must be strictly monotonic")
 state:Reset("client", firstSession)
+assert(next(state.sourceCacheByHash) == nil, "mapping reset must drop cached sources")
 
 local firstJob = state:TrackJob("script-a")
 assert(firstJob ~= nil and firstJob.state == "queued")
@@ -31,6 +32,7 @@ assert(not invalidTransitionOk, "mapped jobs must not transition back to queued"
 
 local capturedSession = state.session
 local capturedGeneration = state.generation
+state.sourceCacheByHash["poison"] = "-- failed to decompile script or decompiler server not active"
 local secondSession = UploadSession.new("second", 200, 2)
 state:Reset("client", secondSession)
 assert(not state:IsActiveSession(capturedSession, capturedGeneration, "client"))
@@ -38,6 +40,7 @@ assert(state:IsActiveSession(secondSession, state.generation, "client"))
 assert(capturedSession:NextRevision() == 1)
 capturedSession:MarkStarted()
 assert(not secondSession.started, "an old upload response must not start the new session")
+assert(next(state.sourceCacheByHash) == nil, "a new mapping session must not reuse cached sources")
 local recoveryJob = state:TrackJob("recovery")
 assert(not state:IsFinished(), "mapping cannot finish before the initial scan")
 assert(state:CanDeferScanJob(recoveryJob, state.generation))
@@ -156,6 +159,29 @@ end, function(job)
 end)
 assert(processedBatchJobs[1] == "b-healthy", "one bad script must not starve later failed retries")
 assert(firstBatchJob.nextResyncAt == 560)
+
+local poisonPipeline = {
+    generation = 1,
+    clientId = "client",
+    sourceCacheByHash = {
+        h = "-- failed to decompile script or decompiler server not active",
+    },
+    sourceCacheCheckedByHash = {},
+    scriptHashByDebugId = { d1 = "h" },
+}
+local poisonClient = DecompilerClientFactory({
+    ScriptMappingPipeline = poisonPipeline,
+    GetScriptHash = function()
+        return "h"
+    end,
+})
+local preparedFromPoison, poisonError = poisonClient.PrepareScriptForMapping({
+    GetDebugId = function()
+        return "d1"
+    end,
+}, false, 1, "client")
+assert(poisonPipeline.sourceCacheByHash.h == nil, "unusable cached source must be dropped")
+assert(not (preparedFromPoison and preparedFromPoison.source), poisonError)
 
 local RetryOptions = DecompilerClientFactory({})
 local ordinaryPrepared = {}

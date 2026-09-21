@@ -7,8 +7,10 @@ import net from "node:net";
 import path from "node:path";
 import {
   DECOMPILER_CONFIG_DIR,
+  FISSION_LOCAL_ENDPOINT,
   SHINY_LOCAL_ENDPOINT,
   loadDecompilerSettings,
+  rewriteFissionDecompilePath,
   type DecompilerSettings,
   type DecompilerProviderId,
 } from "../../../../decompiler/settings.js";
@@ -136,7 +138,7 @@ function httpReady(url: string, timeoutMs = 1500): Promise<boolean> {
   });
 }
 
-async function waitForHttpReady(url: string, timeoutMs = 8000): Promise<boolean> {
+async function waitForHttpReady(url: string, timeoutMs = 15000): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (await httpReady(url)) return true;
@@ -145,12 +147,16 @@ async function waitForHttpReady(url: string, timeoutMs = 8000): Promise<boolean>
   return false;
 }
 
-function decompilerEndpoint(port: number): string {
-  return `http://localhost:${port}/luau/decompile`;
+function providerDecompileEndpoint(provider: SetupProviderId, port: number): string {
+  return provider === "fission"
+    ? `http://localhost:${port}/decompile`
+    : `http://localhost:${port}/luau/decompile`;
 }
 
-function localStatusUrl(port: number): string {
-  return `http://127.0.0.1:${port}/`;
+function providerStatusUrl(provider: SetupProviderId, port: number): string {
+  return provider === "fission"
+    ? `http://127.0.0.1:${port}/health`
+    : `http://127.0.0.1:${port}/`;
 }
 
 function localPortAvailable(port: number): Promise<boolean> {
@@ -224,7 +230,7 @@ function fissionAsset(): { name: string; url: string } | null {
 }
 
 function runtimeForProvider(provider: SetupProviderId): ProviderRuntime {
-  const preferredPort = provider === "shiny" ? 3000 : 3001;
+  const preferredPort = provider === "shiny" ? 3000 : 8080;
   const installPath = path.join(SETUP_ROOT, provider, LATEST_RELEASE);
   const asset = provider === "shiny" ? shinyAsset() : fissionAsset();
   return {
@@ -233,8 +239,11 @@ function runtimeForProvider(provider: SetupProviderId): ProviderRuntime {
     installPath,
     binaryPath: asset ? path.join(installPath, asset.name) : null,
     logPath: path.join(installPath, provider === "shiny" ? "shiny-server.log" : "fission-server.log"),
-    endpoint: decompilerEndpoint,
-    args: (port) => (provider === "shiny" ? ["serve", "--port", String(port)] : ["--port", String(port)]),
+    endpoint: (port) => providerDecompileEndpoint(provider, port),
+    args: (port) =>
+      provider === "shiny"
+        ? ["serve", "--port", String(port)]
+        : ["--port", String(port), "--max-timeout", "30"],
     unsupportedError: asset
       ? undefined
       : provider === "shiny"
@@ -245,7 +254,7 @@ function runtimeForProvider(provider: SetupProviderId): ProviderRuntime {
 
 function loopbackPortFromEndpoint(endpoint: string, fallbackPort: number): number | null {
   try {
-    const url = new URL(endpoint || decompilerEndpoint(fallbackPort));
+    const url = new URL(endpoint || `http://localhost:${fallbackPort}/`);
     const hostname = url.hostname.toLowerCase();
     if (
       hostname !== "localhost" &&
@@ -304,7 +313,10 @@ function validInstallRecord(
     installPath: value.installPath,
     binaryPath: value.binaryPath,
     logPath: value.logPath,
-    endpoint: value.endpoint,
+    endpoint:
+      provider === "fission"
+        ? rewriteFissionDecompilePath(value.endpoint)
+        : value.endpoint,
     port: value.port,
     assetName: value.assetName,
     assetUrl: value.assetUrl,
@@ -406,7 +418,7 @@ function endpointPreference(
   }
 
   return {
-    endpoint: decompilerEndpoint(port),
+    endpoint: providerDecompileEndpoint(provider, port),
     port,
   };
 }
@@ -441,7 +453,7 @@ async function setupStatusForProvider(
   const endpoint = port ? runtime.endpoint(port) : preferredEndpoint;
   const binaryPath = installRecord?.binaryPath ?? runtime.binaryPath;
   const binaryExists = binaryPath ? await pathExists(binaryPath) : false;
-  const serverRunning = port ? await httpReady(localStatusUrl(port)) : false;
+  const serverRunning = port ? await httpReady(providerStatusUrl(provider, port)) : false;
 
   return {
     ok: true,
@@ -476,9 +488,9 @@ async function chooseSetupPort(options: {
 
   const explicitPort = preferred.port;
   if (explicitPort) {
-    const statusUrl = localStatusUrl(explicitPort);
+    const statusUrl = providerStatusUrl(options.provider, explicitPort);
     if (isInstalled && await httpReady(statusUrl)) {
-      options.logs.push(`Existing ${options.provider} install record is already running at ${decompilerEndpoint(explicitPort)}.`);
+      options.logs.push(`Existing ${options.provider} install record is already running at ${providerDecompileEndpoint(options.provider, explicitPort)}.`);
       options.logs.push("Not starting another copy.");
       return { ok: true, port: explicitPort, alreadyRunning: true };
     }
@@ -499,7 +511,7 @@ async function chooseSetupPort(options: {
     if (!portIsAvailable) {
       return {
         ok: false,
-        endpoint: decompilerEndpoint(explicitPort),
+        endpoint: providerDecompileEndpoint(options.provider, explicitPort),
         error: `Port ${explicitPort} is already in use, but the existing local ${options.provider} server did not answer. Stop that process or change the endpoint before running setup again.`,
       };
     }
@@ -511,15 +523,15 @@ async function chooseSetupPort(options: {
   }
 
   if (isInstalled) {
-    if (await httpReady(localStatusUrl(options.preferredPort))) {
-      options.logs.push(`Existing ${options.provider} install record is already running at ${decompilerEndpoint(options.preferredPort)}.`);
+    if (await httpReady(providerStatusUrl(options.provider, options.preferredPort))) {
+      options.logs.push(`Existing ${options.provider} install record is already running at ${providerDecompileEndpoint(options.provider, options.preferredPort)}.`);
       options.logs.push("Not starting another copy.");
       return { ok: true, port: options.preferredPort, alreadyRunning: true };
     }
     if (!(await localPortAvailable(options.preferredPort))) {
       return {
         ok: false,
-        endpoint: decompilerEndpoint(options.preferredPort),
+        endpoint: providerDecompileEndpoint(options.provider, options.preferredPort),
         error: `Port ${options.preferredPort} is already in use. Stop the existing process or change the endpoint before running setup again.`,
       };
     }
@@ -557,7 +569,7 @@ export async function ensureLocalDecompilerProviderRunning(
     };
   }
 
-  if (await httpReady(localStatusUrl(port))) {
+  if (await httpReady(providerStatusUrl(provider, port))) {
     return {
       ok: true,
       provider,
@@ -617,7 +629,7 @@ export async function ensureLocalDecompilerProviderRunning(
     cwd: installRecord.installPath,
     logPath: installRecord.logPath,
   });
-  const ready = await waitForHttpReady(localStatusUrl(port));
+  const ready = await waitForHttpReady(providerStatusUrl(provider, port));
   return {
     ok: ready,
     provider,
@@ -647,7 +659,7 @@ export async function ensureConfiguredLocalDecompilerProvidersRunning(
       if (mode !== "local") continue;
     }
 
-    const endpoint = provider.endpoint || (id === "shiny" ? SHINY_LOCAL_ENDPOINT : decompilerEndpoint(3001));
+    const endpoint = provider.endpoint || (id === "shiny" ? SHINY_LOCAL_ENDPOINT : FISSION_LOCAL_ENDPOINT);
     const result = await ensureLocalDecompilerProviderRunning(id, endpoint);
     results.push(result);
     if (!result.ok) {
@@ -738,7 +750,7 @@ async function setupShiny(configuredEndpoint?: string): Promise<SetupResponse> {
   const runtime = runtimeForProvider(provider);
   const preferredPort = runtime.preferredPort;
   const installPath = runtime.installPath;
-  const fallbackEndpoint = decompilerEndpoint(preferredPort);
+  const fallbackEndpoint = runtime.endpoint(preferredPort);
   const asset = shinyAsset();
   if (!asset) {
     return {
@@ -797,7 +809,7 @@ async function setupShiny(configuredEndpoint?: string): Promise<SetupResponse> {
           runtime,
           asset,
           binaryPath: activeBinaryPath,
-          endpoint: decompilerEndpoint(recordPort),
+          endpoint: runtime.endpoint(recordPort),
           port: recordPort,
           previous: installRecord,
         })
@@ -815,8 +827,8 @@ async function setupShiny(configuredEndpoint?: string): Promise<SetupResponse> {
   }
 
   const port = portChoice.port;
-  const endpoint = decompilerEndpoint(port);
-  const statusUrl = localStatusUrl(port);
+  const endpoint = runtime.endpoint(port);
+  const statusUrl = providerStatusUrl(provider, port);
   const args = ["serve", "--port", String(port)];
   const nextRecord = downloadSucceeded
     ? installRecordForRuntime({ provider, runtime, asset, binaryPath: activeBinaryPath, endpoint, port, previous: installRecord })
@@ -877,7 +889,7 @@ async function setupFission(configuredEndpoint?: string): Promise<SetupResponse>
   const runtime = runtimeForProvider(provider);
   const preferredPort = runtime.preferredPort;
   const installPath = runtime.installPath;
-  const fallbackEndpoint = decompilerEndpoint(preferredPort);
+  const fallbackEndpoint = runtime.endpoint(preferredPort);
   const asset = fissionAsset();
   if (!asset) {
     return {
@@ -936,7 +948,7 @@ async function setupFission(configuredEndpoint?: string): Promise<SetupResponse>
           runtime,
           asset,
           binaryPath: activeBinaryPath,
-          endpoint: decompilerEndpoint(recordPort),
+          endpoint: runtime.endpoint(recordPort),
           port: recordPort,
           previous: installRecord,
         })
@@ -954,9 +966,9 @@ async function setupFission(configuredEndpoint?: string): Promise<SetupResponse>
   }
 
   const port = portChoice.port;
-  const endpoint = decompilerEndpoint(port);
-  const statusUrl = localStatusUrl(port);
-  const args = ["--port", String(port)];
+  const endpoint = runtime.endpoint(port);
+  const statusUrl = providerStatusUrl(provider, port);
+  const args = runtime.args(port);
   const nextRecord = downloadSucceeded
     ? installRecordForRuntime({ provider, runtime, asset, binaryPath: activeBinaryPath, endpoint, port, previous: installRecord })
     : installRecord

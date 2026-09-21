@@ -32,6 +32,7 @@ export interface DecompilerProviderInfo {
     | "plain-bytecode"
     | "luacid"
     | "oracle-json"
+    | "fission-json"
     | "configurable";
 }
 
@@ -90,6 +91,27 @@ let decompilerSettingsCache: { settings: DecompilerSettings; expiresAt: number }
 let decompilerSettingsLoadPromise: Promise<DecompilerSettings> | null = null;
 export const SHINY_LOCAL_ENDPOINT = "http://localhost:3000/luau/decompile";
 export const SHINY_HOSTED_ENDPOINT = "https://medal.upio.dev/decompile";
+export const FISSION_LOCAL_ENDPOINT = "http://localhost:8080/decompile";
+export const FISSION_LEGACY_LOCAL_ENDPOINT = "http://localhost:3001/luau/decompile";
+export const FISSION_SAFE_FLAGS = [
+  "inferTypes",
+  "optimizeIR",
+  "inferRobloxTypes",
+  "autoNameVariables",
+  "omitFissionComments",
+] as const;
+export type FissionSafeFlag = (typeof FISSION_SAFE_FLAGS)[number];
+export type FissionBytecodeMode = "vanilla" | "roblox";
+export const FISSION_DEFAULT_OPTIONS: {
+  mode: FissionBytecodeMode;
+} & Record<FissionSafeFlag, boolean> = {
+  mode: "roblox",
+  inferTypes: true,
+  optimizeIR: true,
+  inferRobloxTypes: true,
+  autoNameVariables: true,
+  omitFissionComments: false,
+};
 export const LUACID_DEFAULT_OPTIONS: Record<string, unknown> = {
   transport: "auto",
   transportExplicit: false,
@@ -165,10 +187,10 @@ export const DECOMPILER_PROVIDER_INFO: DecompilerProviderInfo[] = [
   {
     id: "fission",
     label: "Fission",
-    description: "Local Fission HTTP server endpoint.",
+    description: "Local Fission.Server HTTP API (POST /decompile).",
     local: true,
     requiresApiKey: false,
-    bodyFormat: "plain-base64",
+    bodyFormat: "fission-json",
   },
   {
     id: "custom",
@@ -225,10 +247,10 @@ const DEFAULT_PROVIDERS: Record<BuiltInDecompilerProviderId, DecompilerProviderS
   },
   fission: {
     enabled: false,
-    endpoint: "http://localhost:3001/luau/decompile",
+    endpoint: FISSION_LOCAL_ENDPOINT,
     apiKey: "",
     version: null,
-    options: {},
+    options: { ...FISSION_DEFAULT_OPTIONS },
   },
   custom: {
     enabled: false,
@@ -255,7 +277,7 @@ export const DEFAULT_PROVIDER_TIMEOUTS_MS: Record<string, number> = {
   luacid: 15000,
   oracle: 15000,
   konstant: 10000,
-  fission: 6000,
+  fission: 35000,
   custom: 10000,
 };
 
@@ -427,17 +449,20 @@ function normalizeRuntimeSettings(
     ),
     timeoutLimit: normalizeNumber(input.timeoutLimit, fallback.timeoutLimit, 1, 20),
     providerTimeoutsMs: Object.fromEntries(
-      providerIds.map((id) => [
-        id,
-        normalizeNumber(
-          inputTimeouts[id],
+      providerIds.map((id) => {
+        const fallbackTimeout =
           fallbackTimeouts[id] ??
-            DEFAULT_PROVIDER_TIMEOUTS_MS[id] ??
-            DEFAULT_PROVIDER_TIMEOUTS_MS.custom,
-          500,
-          60000
-        ),
-      ])
+          DEFAULT_PROVIDER_TIMEOUTS_MS[id] ??
+          DEFAULT_PROVIDER_TIMEOUTS_MS.custom;
+        const storedTimeout = inputTimeouts[id];
+        if (id === "fission" && storedTimeout === 6000) {
+          return [id, DEFAULT_PROVIDER_TIMEOUTS_MS.fission];
+        }
+        return [
+          id,
+          normalizeNumber(storedTimeout, fallbackTimeout, 500, 60000),
+        ];
+      })
     ),
   };
 }
@@ -493,6 +518,68 @@ function withShinyMode(
   };
 }
 
+function stripTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function isLegacyFissionDefaultEndpoint(endpoint: string): boolean {
+  return stripTrailingSlash(endpoint) === stripTrailingSlash(FISSION_LEGACY_LOCAL_ENDPOINT);
+}
+
+export function rewriteFissionDecompilePath(endpoint: string): string {
+  const raw = normalizeString(endpoint, FISSION_LOCAL_ENDPOINT) || FISSION_LOCAL_ENDPOINT;
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `http://${raw}`);
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    if (pathname === "/luau/decompile" || pathname === "/") {
+      url.pathname = "/decompile";
+    }
+    return stripTrailingSlash(url.toString());
+  } catch {
+    return raw.replace(/\/luau\/decompile\/?$/, "/decompile");
+  }
+}
+
+export function migrateFissionEndpoint(endpoint: string): string {
+  const raw = normalizeString(endpoint, FISSION_LOCAL_ENDPOINT) || FISSION_LOCAL_ENDPOINT;
+  if (isLegacyFissionDefaultEndpoint(raw)) return FISSION_LOCAL_ENDPOINT;
+  return rewriteFissionDecompilePath(raw);
+}
+
+function normalizeFissionMode(value: unknown): FissionBytecodeMode {
+  return value === "vanilla" ? "vanilla" : FISSION_DEFAULT_OPTIONS.mode;
+}
+
+function normalizeFissionFlag(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function withFissionContract(provider: DecompilerProviderSettings): DecompilerProviderSettings {
+  const options = isObject(provider.options) ? provider.options : {};
+  return {
+    ...provider,
+    endpoint: migrateFissionEndpoint(provider.endpoint || FISSION_LOCAL_ENDPOINT),
+    options: {
+      ...options,
+      mode: normalizeFissionMode(options.mode),
+      inferTypes: normalizeFissionFlag(options.inferTypes, FISSION_DEFAULT_OPTIONS.inferTypes),
+      optimizeIR: normalizeFissionFlag(options.optimizeIR, FISSION_DEFAULT_OPTIONS.optimizeIR),
+      inferRobloxTypes: normalizeFissionFlag(
+        options.inferRobloxTypes,
+        FISSION_DEFAULT_OPTIONS.inferRobloxTypes
+      ),
+      autoNameVariables: normalizeFissionFlag(
+        options.autoNameVariables,
+        FISSION_DEFAULT_OPTIONS.autoNameVariables
+      ),
+      omitFissionComments: normalizeFissionFlag(
+        options.omitFissionComments,
+        FISSION_DEFAULT_OPTIONS.omitFissionComments
+      ),
+    },
+  };
+}
+
 function normalizeProvider(
   id: DecompilerProviderId,
   value: unknown,
@@ -542,6 +629,7 @@ function normalizeSettings(value: unknown, fallback: DecompilerSettings): Decomp
     })
   );
   providers.shiny = withShinyMode(providers.shiny);
+  providers.fission = withFissionContract(providers.fission);
 
   if (isObject(inputProviders.medal)) {
     const hasExplicitShiny = isObject(inputProviders.shiny);
@@ -563,6 +651,16 @@ function normalizeSettings(value: unknown, fallback: DecompilerSettings): Decomp
     }
   }
 
+  const runtime = normalizeRuntimeSettings(input.runtime, fallback.runtime, providerIds);
+  if (providers.fission?.enabled) {
+    const fissionTimeout =
+      runtime.providerTimeoutsMs.fission ?? DEFAULT_PROVIDER_TIMEOUTS_MS.fission;
+    runtime.overallTimeoutMs = Math.max(
+      runtime.overallTimeoutMs,
+      Math.min(60_000, fissionTimeout + 5_000)
+    );
+  }
+
   return {
     providerOrder: normalizeProviderOrder(
       input.providerOrder,
@@ -570,7 +668,7 @@ function normalizeSettings(value: unknown, fallback: DecompilerSettings): Decomp
       providerIds
     ),
     providers,
-    runtime: normalizeRuntimeSettings(input.runtime, fallback.runtime, providerIds),
+    runtime,
   };
 }
 

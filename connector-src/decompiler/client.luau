@@ -55,9 +55,21 @@ local function RunWithTimeout(timeoutSeconds, callback)
     return true, result
 end
 
+local function IsUnusableDecompiledSource(source)
+    if type(source) ~= "string" then return true end
+    local trimmed = string.gsub(source, "^%s+", "")
+    trimmed = string.gsub(trimmed, "%s+$", "")
+    if trimmed == "" then return true end
+    local lowered = string.lower(trimmed)
+    if string.find(lowered, "failed to decompile", 1, true) then return true end
+    if string.find(lowered, "decompiler server not active", 1, true) then return true end
+    if string.find(lowered, "decompiler is not active", 1, true) then return true end
+    return false
+end
+
 local function RememberScriptSourceForHash(scriptHash, source)
     if type(scriptHash) ~= "string" or scriptHash == "" then return false end
-    if type(source) ~= "string" or source == "" then return false end
+    if IsUnusableDecompiledSource(source) then return false end
 
     ScriptMappingPipeline.sourceCacheByHash[scriptHash] = source
     ScriptMappingPipeline.sourceCacheCheckedByHash[scriptHash] = true
@@ -185,7 +197,7 @@ local function TryBuiltInDecompile(script)
         local errorMessage = tostring(source or "Built-in decompile failed.")
         return nil, latencyMs, errorMessage, string.find(errorMessage, "Timed out", 1, true) ~= nil
     end
-    if type(source) ~= "string" or source == "" then
+    if type(source) ~= "string" or source == "" or IsUnusableDecompiledSource(source) then
         return nil, latencyMs, "Built-in decompile returned no source.", false
     end
 
@@ -376,6 +388,9 @@ local function RequestServerDecompile(bytecode, options, generation, clientId)
     end
 
     if decoded.ok == true and type(decoded.source) == "string" and decoded.source ~= "" then
+        if IsUnusableDecompiledSource(decoded.source) then
+            return nil, decoded.source, false, firstAttemptedProvider
+        end
         return StripDecompilerBanner(decoded.source), nil, false, firstAttemptedProvider
     end
     if decoded.needsBuiltin == true and decoded.providerId == "builtin" then
@@ -403,11 +418,15 @@ local function PrepareScriptForMapping(script, fetchCache, generation, clientId,
 
     local cachedSource = scriptHash and ScriptMappingPipeline.sourceCacheByHash[scriptHash] or nil
     if cachedSource then
-        return {
-            debugId = debugId,
-            scriptHash = scriptHash,
-            source = cachedSource,
-        }
+        if IsUnusableDecompiledSource(cachedSource) then
+            ScriptMappingPipeline.sourceCacheByHash[scriptHash] = nil
+        else
+            return {
+                debugId = debugId,
+                scriptHash = scriptHash,
+                source = cachedSource,
+            }
+        end
     end
 
     local plannedProvider = RefreshDecompilerPlan(false, generation, clientId)

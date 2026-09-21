@@ -85,6 +85,17 @@ function hashSource(source: string): string {
   return crypto.createHash("sha256").update(source).digest("hex");
 }
 
+function isUnusableDecompiledSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (!trimmed) return true;
+  const lowered = trimmed.toLowerCase();
+  return (
+    lowered.includes("failed to decompile") ||
+    lowered.includes("decompiler server not active") ||
+    lowered.includes("decompiler is not active")
+  );
+}
+
 function normalizeScriptHash(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -122,6 +133,18 @@ function updateScriptHashIndex(
   const indexed = store.scriptsByHash.get(script.scriptHash);
   if (!indexed || indexed.debugId === script.debugId || script.updatedAt >= indexed.updatedAt) {
     store.scriptsByHash.set(script.scriptHash, script);
+  }
+}
+
+function dropUnusableStoredScript(
+  store: ClientScriptSourceStore,
+  script: StoredScriptSource
+): void {
+  store.scripts.delete(script.debugId);
+  store.activeScripts.delete(script.debugId);
+  store.activeRevisionByScriptId.delete(script.debugId);
+  if (script.scriptHash && store.scriptsByHash.get(script.scriptHash) === script) {
+    store.scriptsByHash.delete(script.scriptHash);
   }
 }
 
@@ -268,7 +291,8 @@ export function upsertScriptSources(
     if (
       typeof script.debugId !== "string" ||
       typeof script.path !== "string" ||
-      typeof script.source !== "string"
+      typeof script.source !== "string" ||
+      isUnusableDecompiledSource(script.source)
     ) {
       continue;
     }
@@ -346,6 +370,10 @@ export function getCachedScriptSourcesByScriptHash(
   for (const scriptHash of wanted) {
     const script = store.scriptsByHash.get(scriptHash);
     if (!script) continue;
+    if (isUnusableDecompiledSource(script.source)) {
+      dropUnusableStoredScript(store, script);
+      continue;
+    }
     results.push({
       scriptHash,
       debugId: script.debugId,
@@ -361,9 +389,14 @@ export function getCachedScriptSourcesByScriptHash(
 
 export function getScriptSourceIndex(identity: ScriptSourceStoreIdentity): ScriptSourceIndex {
   const store = getOrCreateStore(identity);
-  const scripts = store.mappingSessionId
+  const scripts = (store.mappingSessionId
     ? [...store.activeScripts.values()]
-    : [...store.scripts.values()];
+    : [...store.scripts.values()]
+  ).filter((script) => {
+    if (!isUnusableDecompiledSource(script.source)) return true;
+    dropUnusableStoredScript(store, script);
+    return false;
+  });
   return {
     ...getScriptSourceIndexSummary(identity, store),
     scripts,

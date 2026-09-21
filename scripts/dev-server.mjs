@@ -166,6 +166,7 @@ let mockOracleApiKey = "";
 let mockLuacidApiKey = "";
 const MOCK_SHINY_HOSTED_ENDPOINT = "https://medal.upio.dev/decompile";
 const MOCK_SHINY_LOCAL_ENDPOINT = "http://localhost:3000/luau/decompile";
+const MOCK_FISSION_LOCAL_ENDPOINT = "http://localhost:8080/decompile";
 const MOCK_PROVIDER_TIMEOUTS_MS = {
   builtin: 8000,
   luaexpert: 10000,
@@ -173,7 +174,7 @@ const MOCK_PROVIDER_TIMEOUTS_MS = {
   luacid: 15000,
   oracle: 15000,
   konstant: 10000,
-  fission: 6000,
+  fission: 35000,
 };
 const MOCK_DECOMPILER_RUNTIME = {
   adaptiveFallback: true,
@@ -238,9 +239,16 @@ let mockDecompilerSettings = {
     },
     fission: {
       enabled: false,
-      endpoint: "http://localhost:3001/luau/decompile",
+      endpoint: MOCK_FISSION_LOCAL_ENDPOINT,
       version: null,
-      options: {},
+      options: {
+        mode: "roblox",
+        inferTypes: true,
+        optimizeIR: true,
+        inferRobloxTypes: true,
+        autoNameVariables: true,
+        omitFissionComments: false,
+      },
       apiKeySet: false,
       apiKeyMasked: "",
     },
@@ -760,7 +768,7 @@ async function handleApi(req, res, url) {
         (provider === "shiny"
           ? MOCK_SHINY_LOCAL_ENDPOINT
           : provider === "fission"
-            ? "http://localhost:3001/luau/decompile"
+            ? MOCK_FISSION_LOCAL_ENDPOINT
             : "");
       if (!endpoint || !mockDecompilerSettings.providers[provider]) {
         json(res, 400, { error: "Unsupported decompiler provider setup." });
@@ -796,7 +804,7 @@ async function handleApi(req, res, url) {
       (provider === "shiny"
         ? MOCK_SHINY_LOCAL_ENDPOINT
         : provider === "fission"
-          ? "http://localhost:3001/luau/decompile"
+          ? MOCK_FISSION_LOCAL_ENDPOINT
           : "");
     if (!endpoint || !mockDecompilerSettings.providers[provider]) {
       json(res, 400, { error: "Unsupported decompiler provider setup." });
@@ -817,7 +825,7 @@ async function handleApi(req, res, url) {
       runCommand:
         provider === "shiny"
           ? `medal serve --port ${new URL(endpoint).port || "3000"}`
-          : `Fission.Server --port ${new URL(endpoint).port || "3001"}`,
+          : `Fission.Server --port ${new URL(endpoint).port || "8080"} --max-timeout 30`,
       logPath: `/mock/decompilers/${provider}/${provider}.log`,
       started: true,
       output: `Mock ${provider} setup completed. No release download was run.`,

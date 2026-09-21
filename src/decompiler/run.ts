@@ -1,12 +1,16 @@
 import {
   DEFAULT_DECOMPILER_RUNTIME_SETTINGS,
   DEFAULT_PROVIDER_TIMEOUTS_MS,
+  FISSION_DEFAULT_OPTIONS,
+  FISSION_SAFE_FLAGS,
   isCustomDecompilerProviderId,
   isDecompilerProviderId,
   type DecompilerProviderId,
   type DecompilerProviderSettings,
   type DecompilerRuntimeSettings,
   type DecompilerSettings,
+  type FissionBytecodeMode,
+  type FissionSafeFlag,
 } from "./settings.js";
 import {
   getDecompilerProviderStatus,
@@ -48,6 +52,7 @@ interface ProviderRunResult {
 
 const ENDPOINT_BRIDGE_HOST_TOKEN = "{{BridgeHost}}";
 const MAX_ERROR_BODY_CHARS = 600;
+const FISSION_MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 const LUA_EXPERT_MIN_INTERVAL_MS = 120;
 const LOAD_IDLE_RESET_MS = 5000;
 let luaExpertLastCallAt = 0;
@@ -152,6 +157,17 @@ function truncateErrorBody(body: string): string {
   return body.length > MAX_ERROR_BODY_CHARS
     ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}...(truncated)`
     : body;
+}
+
+function isUnusableDecompiledSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (!trimmed) return true;
+  const lowered = trimmed.toLowerCase();
+  return (
+    lowered.includes("failed to decompile") ||
+    lowered.includes("decompiler server not active") ||
+    lowered.includes("decompiler is not active")
+  );
 }
 
 function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
@@ -278,6 +294,180 @@ async function runPlainBase64(
     },
     timeoutMs
   );
+}
+
+function fissionMode(provider: DecompilerProviderSettings): FissionBytecodeMode {
+  return provider.options.mode === "vanilla" ? "vanilla" : FISSION_DEFAULT_OPTIONS.mode;
+}
+
+function fissionFlag(provider: DecompilerProviderSettings, flag: FissionSafeFlag): boolean {
+  const value = provider.options[flag];
+  return typeof value === "boolean" ? value : FISSION_DEFAULT_OPTIONS[flag];
+}
+
+function buildFissionRequestBody(
+  bytecodeBase64: string,
+  provider: DecompilerProviderSettings,
+  timeoutMs: number
+): { body: string } | { error: string } {
+  if (!bytecodeBase64) {
+    return { error: "Fission request is missing bytecode." };
+  }
+
+  const flags: Partial<Record<FissionSafeFlag, true>> = {};
+  for (const flag of FISSION_SAFE_FLAGS) {
+    if (fissionFlag(provider, flag)) flags[flag] = true;
+  }
+
+  const payload: Record<string, unknown> = {
+    mode: fissionMode(provider),
+    bytecode: bytecodeBase64,
+  };
+  if (Object.keys(flags).length > 0) payload.flags = flags;
+
+  const timeoutSeconds = Math.floor(timeoutMs / 1000);
+  if (timeoutSeconds > 0) payload.timeout = timeoutSeconds;
+
+  const body = JSON.stringify(payload);
+  if (Buffer.byteLength(body, "utf8") > FISSION_MAX_REQUEST_BYTES) {
+    return { error: "Fission request exceeds the 32 MiB body limit." };
+  }
+  return { body };
+}
+
+function parseFissionResponse(
+  status: number,
+  body: string,
+  latencyMs: number
+): ProviderRunResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    if (status < 200 || status >= 300) {
+      return {
+        ok: false,
+        error: `HTTP ${status}: ${truncateErrorBody(body)}`,
+        statusCode: status,
+        latencyMs,
+      };
+    }
+    return {
+      ok: false,
+      error: "Fission returned invalid JSON.",
+      statusCode: status,
+      latencyMs,
+    };
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      error: "Fission returned an invalid response object.",
+      statusCode: status,
+      latencyMs,
+    };
+  }
+
+  const payload = parsed as Record<string, unknown>;
+  if (payload.ok === false) {
+    const message =
+      typeof payload.error === "string" && payload.error.trim()
+        ? payload.error.trim()
+        : "Fission decompile failed.";
+    return {
+      ok: false,
+      error: `HTTP ${status}: ${truncateErrorBody(message)}`,
+      statusCode: status,
+      latencyMs,
+    };
+  }
+
+  if (status < 200 || status >= 300) {
+    return {
+      ok: false,
+      error: `HTTP ${status}: ${truncateErrorBody(body)}`,
+      statusCode: status,
+      latencyMs,
+    };
+  }
+
+  if (payload.ok !== true) {
+    return {
+      ok: false,
+      error: "Fission response is missing a boolean ok field.",
+      statusCode: status,
+      latencyMs,
+    };
+  }
+
+  const result = payload.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return {
+      ok: false,
+      error: "Fission success response is missing result.",
+      statusCode: status,
+      latencyMs,
+    };
+  }
+
+  const source = (result as Record<string, unknown>).decompilationOutput;
+  if (typeof source !== "string") {
+    return {
+      ok: false,
+      error: "Fission success response is missing decompilationOutput.",
+      statusCode: status,
+      latencyMs,
+    };
+  }
+
+  return {
+    ok: true,
+    result: source.replaceAll(String.fromCharCode(0x00CD), " "),
+    statusCode: status,
+    latencyMs,
+  };
+}
+
+async function runFission(
+  provider: DecompilerProviderSettings,
+  bytecodeBase64: string,
+  timeoutMs: number
+): Promise<ProviderRunResult> {
+  const request = buildFissionRequestBody(bytecodeBase64, provider, timeoutMs);
+  if ("error" in request) {
+    return { ok: false, error: request.error, latencyMs: 0 };
+  }
+
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(resolveProviderEndpoint(provider.endpoint), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: request.body,
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    return parseFissionResponse(response.status, body, Date.now() - startedAt);
+  } catch (error) {
+    const latencyMs = Date.now() - startedAt;
+    const timedOut = error instanceof Error && error.name === "AbortError";
+    return {
+      ok: false,
+      error: timedOut
+        ? `Timed out after ${Math.round(timeoutMs / 100) / 10}s.`
+        : error instanceof Error
+          ? error.message
+          : String(error),
+      timedOut,
+      latencyMs,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function runPlainBytecode(
@@ -673,8 +863,11 @@ async function runProvider(options: {
   if (options.id === "luaexpert") {
     return runLuaExpert(options.provider, options.bytecodeBase64, options.timeoutMs);
   }
-  if (options.id === "shiny" || options.id === "fission") {
+  if (options.id === "shiny") {
     return runPlainBase64(options.provider, options.bytecodeBase64, options.timeoutMs);
+  }
+  if (options.id === "fission") {
+    return runFission(options.provider, options.bytecodeBase64, options.timeoutMs);
   }
   if (options.id === "luacid") {
     return runLuacid(options.provider, options.bytecode, options.bytecodeBase64, options.timeoutMs);
@@ -809,6 +1002,18 @@ export async function decompileBytecode(
     }
 
     if (result.ok && typeof result.result === "string" && result.result !== "") {
+      if (isUnusableDecompiledSource(result.result)) {
+        recordDecompilerProviderFailure({
+          id,
+          errorMessage: result.result.trim(),
+          runtime,
+          statusCode: result.statusCode,
+          latencyMs: result.latencyMs,
+          clientId: input.clientId,
+        });
+        attempts.push(`[${id}] ${result.result.trim()}`);
+        continue;
+      }
       recordDecompilerProviderSuccess(id, result.latencyMs, runtime, input.clientId);
       return {
         ok: true,

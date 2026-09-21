@@ -129,6 +129,16 @@ const themeSettings = createThemeSettings({
 
 const SHINY_LOCAL_ENDPOINT = 'http://localhost:3000/luau/decompile';
 const SHINY_HOSTED_ENDPOINT = 'https://medal.upio.dev/decompile';
+const FISSION_LOCAL_ENDPOINT = 'http://localhost:8080/decompile';
+const FISSION_LEGACY_LOCAL_ENDPOINT = 'http://localhost:3001/luau/decompile';
+const FISSION_DEFAULT_OPTIONS = {
+    mode: 'roblox',
+    inferTypes: true,
+    optimizeIR: true,
+    inferRobloxTypes: true,
+    autoNameVariables: true,
+    omitFissionComments: false
+};
 const BRIDGE_HOST_ENDPOINT_TOKEN = '{{BridgeHost}}';
 const LUACID_DEFAULT_OPTIONS = {
     indent: 'tab',
@@ -165,7 +175,7 @@ const DEFAULT_DECOMPILER_RUNTIME = {
         luacid: 15000,
         oracle: 15000,
         konstant: 10000,
-        fission: 6000,
+        fission: 35000,
         custom: 10000
     }
 };
@@ -209,9 +219,9 @@ const decompilerProviderUi = {
     fission: {
         label: 'Fission',
         byline: 'Dottik',
-        description: 'Local Fission HTTP server.',
+        description: 'Local Fission.Server HTTP API using POST /decompile.',
         setupLabel: 'Download & setup Fission',
-        setupDescription: 'Downloads the latest Fission server release and starts the local endpoint.'
+        setupDescription: 'Downloads the latest Fission.Server release and starts the local /decompile endpoint.'
     },
     custom: {
         label: 'Custom provider',
@@ -278,7 +288,45 @@ function endpointDisplayForProvider(id, provider, endpoint) {
 }
 
 function fissionLocalEndpoint() {
-    return 'http://localhost:3001/luau/decompile';
+    return FISSION_LOCAL_ENDPOINT;
+}
+
+function migrateFissionEndpoint(endpoint) {
+    const raw = typeof endpoint === 'string' ? endpoint.trim() : '';
+    if (!raw || raw.replace(/\/+$/, '') === FISSION_LEGACY_LOCAL_ENDPOINT.replace(/\/+$/, '')) {
+        return FISSION_LOCAL_ENDPOINT;
+    }
+    try {
+        const url = new URL(endpointToMcpHostValue(raw));
+        const pathname = url.pathname.replace(/\/+$/, '') || '/';
+        if (pathname === '/luau/decompile' || pathname === '/') url.pathname = '/decompile';
+        return url.toString().replace(/\/+$/, '');
+    } catch {
+        return raw.replace(/\/luau\/decompile\/?$/, '/decompile');
+    }
+}
+
+function fissionFlagEnabled(provider, name) {
+    const value = provider?.options?.[name];
+    if (typeof value === 'boolean') return value;
+    return FISSION_DEFAULT_OPTIONS[name] === true;
+}
+
+function withFissionContract(provider) {
+    const options = provider.options && typeof provider.options === 'object' && !Array.isArray(provider.options)
+        ? { ...provider.options }
+        : {};
+    provider.endpoint = migrateFissionEndpoint(provider.endpoint || FISSION_LOCAL_ENDPOINT);
+    provider.options = {
+        ...options,
+        mode: options.mode === 'vanilla' ? 'vanilla' : 'roblox',
+        inferTypes: typeof options.inferTypes === 'boolean' ? options.inferTypes : FISSION_DEFAULT_OPTIONS.inferTypes,
+        optimizeIR: typeof options.optimizeIR === 'boolean' ? options.optimizeIR : FISSION_DEFAULT_OPTIONS.optimizeIR,
+        inferRobloxTypes: typeof options.inferRobloxTypes === 'boolean' ? options.inferRobloxTypes : FISSION_DEFAULT_OPTIONS.inferRobloxTypes,
+        autoNameVariables: typeof options.autoNameVariables === 'boolean' ? options.autoNameVariables : FISSION_DEFAULT_OPTIONS.autoNameVariables,
+        omitFissionComments: typeof options.omitFissionComments === 'boolean' ? options.omitFissionComments : FISSION_DEFAULT_OPTIONS.omitFissionComments
+    };
+    return provider;
 }
 
 function setShinyMode(provider, mode, preserveCustomEndpoint = false) {
@@ -2284,6 +2332,7 @@ function ensureDecompilerProvider(id) {
         if (!provider.endpoint) provider.endpoint = SHINY_HOSTED_ENDPOINT;
         setShinyMode(provider, shinyMode(provider), true);
     }
+    if (id === 'fission') withFissionContract(decompilerSettings.providers[id]);
     return decompilerSettings.providers[id];
 }
 
@@ -2308,6 +2357,7 @@ function normalizeDecompilerState() {
         }
         delete decompilerSettings.providers.medal;
     }
+    if (decompilerSettings.providers.fission) withFissionContract(decompilerSettings.providers.fission);
 
     const order = [];
     for (const id of decompilerSettings.providerOrder) {
@@ -2336,6 +2386,10 @@ function normalizeDecompilerRuntime(value) {
     const timeoutIds = new Set([...Object.keys(defaults.providerTimeoutsMs), ...Object.keys(inputTimeouts)]);
     for (const id of timeoutIds) {
         const fallback = defaults.providerTimeoutsMs[id] ?? defaults.providerTimeoutsMs.custom ?? 10000;
+        if (id === 'fission' && Number(inputTimeouts[id]) === 6000) {
+            providerTimeoutsMs[id] = defaults.providerTimeoutsMs.fission;
+            continue;
+        }
         providerTimeoutsMs[id] = Math.round(clampRuntimeNumber(inputTimeouts[id], fallback, 500, 60000));
     }
     return {
@@ -2656,15 +2710,17 @@ function queueLatestSettingsSave(resource, task) {
 
     state.running = true;
     state.completion = (async () => {
+        let last;
         try {
             while (state.pending.length) {
                 const next = state.pending.shift();
-                await next();
+                last = await next();
             }
         } finally {
             state.running = false;
             if (!state.pending.length) settingsSaveQueues.delete(resource);
         }
+        return last;
     })();
     return state.completion;
 }
@@ -2757,6 +2813,7 @@ function activateDecompilerProvider(id) {
     const inactive = order.filter(existing => !ensureDecompilerProvider(existing).enabled);
     decompilerSettings.providerOrder = [...active, id, ...inactive];
     renderDecompilerSettings({ animate: true });
+    scheduleDecompilerAutoSave();
 }
 
 function removeDecompilerProvider(id) {
@@ -3199,7 +3256,7 @@ function endpointProviderModalHtml(id, provider) {
     const storedEndpoint = id === 'shiny' && !provider.endpoint ? shinyEndpointForMode(mode) : provider.endpoint || '';
     const endpoint = endpointDisplayForProvider(id, provider, storedEndpoint);
     const note = id === 'fission'
-        ? 'Fission setup runs on the MCP computer; Roblox reaches it through the bridge host.'
+        ? 'Fission.Server accepts JSON at POST /decompile. Setup runs on the MCP computer; Roblox reaches it through the bridge host.'
         : id === 'shiny'
             ? (mode === 'hosted'
                 ? 'Uses the hosted Medal Server endpoint backed by Shiny.'
@@ -3214,8 +3271,30 @@ function endpointProviderModalHtml(id, provider) {
             </div>
         </div>
     ` : '';
+    const fission = id === 'fission' ? withFissionContract(provider) : provider;
+    const fissionMode = fission.options?.mode === 'vanilla' ? 'vanilla' : 'roblox';
+    const fissionModeHtml = id === 'fission' ? `
+        <div class="settings-field">
+            <label>Bytecode mode</label>
+            <div class="settings-provider-toggle decompiler-mode-toggle">
+                <button class="settings-provider-btn ${fissionMode === 'roblox' ? 'settings-provider-btn--active' : ''}" type="button" data-action="set-fission-mode" data-mode="roblox">Roblox</button>
+                <button class="settings-provider-btn ${fissionMode === 'vanilla' ? 'settings-provider-btn--active' : ''}" type="button" data-action="set-fission-mode" data-mode="vanilla">Vanilla</button>
+            </div>
+        </div>
+        <button class="decompiler-advanced-toggle" type="button" data-action="toggle-provider-advanced">Decompiler flags <span>${decompilerAdvancedOpen ? '^' : 'v'}</span></button>
+        <div class="decompiler-advanced-grid" id="decompilerAdvancedFields" ${decompilerAdvancedOpen ? '' : 'hidden'}>
+            <div class="decompiler-flag-list">
+                <label class="decompiler-flag"><input type="checkbox" id="decompilerModalFissionInferTypes" ${fissionFlagEnabled(fission, 'inferTypes') ? 'checked' : ''}> Infer types</label>
+                <label class="decompiler-flag"><input type="checkbox" id="decompilerModalFissionOptimizeIR" ${fissionFlagEnabled(fission, 'optimizeIR') ? 'checked' : ''}> Optimize IR</label>
+                <label class="decompiler-flag"><input type="checkbox" id="decompilerModalFissionInferRobloxTypes" ${fissionFlagEnabled(fission, 'inferRobloxTypes') ? 'checked' : ''}> Infer Roblox types</label>
+                <label class="decompiler-flag"><input type="checkbox" id="decompilerModalFissionAutoNameVariables" ${fissionFlagEnabled(fission, 'autoNameVariables') ? 'checked' : ''}> Auto-name variables</label>
+                <label class="decompiler-flag"><input type="checkbox" id="decompilerModalFissionOmitComments" ${fissionFlagEnabled(fission, 'omitFissionComments') ? 'checked' : ''}> Omit Fission comments</label>
+            </div>
+        </div>
+    ` : '';
     return `
         ${shinyModeHtml}
+        ${fissionModeHtml}
         <div class="settings-field">
             <label>Endpoint</label>
             <input type="text" id="decompilerModalEndpoint" value="${escapeHtml(endpoint)}" placeholder="${escapeHtml(endpointDisplayForProvider(id, provider, id === 'shiny' ? shinyEndpointForMode(mode) : fissionLocalEndpoint()))}">
@@ -3456,6 +3535,20 @@ async function saveDecompilerProviderModal(options = {}) {
             const mode = $('decompilerProviderBody')?.querySelector('[data-action="set-shiny-mode"].settings-provider-btn--active')?.dataset.mode || shinyMode(provider);
             setShinyMode(provider, mode, true);
         }
+        if (id === 'fission') {
+            const mode = $('decompilerProviderBody')?.querySelector('[data-action="set-fission-mode"].settings-provider-btn--active')?.dataset.mode === 'vanilla'
+                ? 'vanilla'
+                : 'roblox';
+            provider.options = {
+                ...(provider.options && typeof provider.options === 'object' && !Array.isArray(provider.options) ? provider.options : {}),
+                mode,
+                inferTypes: $('decompilerModalFissionInferTypes')?.checked === true,
+                optimizeIR: $('decompilerModalFissionOptimizeIR')?.checked === true,
+                inferRobloxTypes: $('decompilerModalFissionInferRobloxTypes')?.checked === true,
+                autoNameVariables: $('decompilerModalFissionAutoNameVariables')?.checked === true,
+                omitFissionComments: $('decompilerModalFissionOmitComments')?.checked === true
+            };
+        }
         const endpoint = endpointToMcpHostValue($('decompilerModalEndpoint')?.value || '');
         if (!endpoint) {
             setDecompilerProviderSaveStatus('Not saved: endpoint is required.', true);
@@ -3468,8 +3561,8 @@ async function saveDecompilerProviderModal(options = {}) {
     provider.enabled = true;
     if (!activeDecompilerOrder().includes(id)) activateDecompilerProvider(id);
     const saved = await queueLatestSettingsSave('decompiler', () => saveDecompilerSettings({ silent: options.silent === true }));
-    if (saved) setDecompilerProviderSaveStatus('Saved automatically');
-    return saved;
+    if (saved !== false) setDecompilerProviderSaveStatus('Saved automatically');
+    return saved !== false;
 }
 
 $('settingsSemanticEnabled').addEventListener('change', () => {
@@ -3514,29 +3607,37 @@ $('decompilerRuntimeBody').addEventListener('input', (e) => {
     scheduleDecompilerAutoSave();
 });
 
+function closeDecompilerAddMenu() {
+    $('settingsAddDecompilerMenu')?.classList.remove('open');
+}
+
 $('settingsAddDecompilerBtn').addEventListener('click', (e) => {
     e.stopPropagation();
-    $('settingsAddDecompilerMenu').classList.toggle('open');
+    const menu = $('settingsAddDecompilerMenu');
+    const willOpen = !menu.classList.contains('open');
+    closeDecompilerAddMenu();
+    if (!willOpen) return;
     renderDecompilerAddMenu();
+    menu.classList.add('open');
 });
 
 $('settingsAddDecompilerMenu').addEventListener('click', (e) => {
     if (e.target.closest('[data-add-custom-provider]')) {
         const id = createCustomDecompilerProviderId();
-        $('settingsAddDecompilerMenu').classList.remove('open');
+        closeDecompilerAddMenu();
         activateDecompilerProvider(id);
         openDecompilerProviderModal(id);
+        scheduleDecompilerProviderAutoSave(0);
         return;
     }
     const item = e.target.closest('[data-add-provider]');
     if (!item) return;
     const id = item.dataset.addProvider;
-    $('settingsAddDecompilerMenu').classList.remove('open');
+    closeDecompilerAddMenu();
     activateDecompilerProvider(id);
     if (id === 'oracle' || id === 'luacid' || id === 'fission' || id === 'shiny' || isCustomDecompilerProviderId(id)) {
         openDecompilerProviderModal(id);
-    } else {
-        scheduleDecompilerAutoSave();
+        scheduleDecompilerProviderAutoSave(0);
     }
 });
 
@@ -3576,6 +3677,12 @@ $('decompilerProviderBody').addEventListener('click', (e) => {
         setShinyMode(provider, mode);
         openDecompilerProviderModal('shiny');
         scheduleDecompilerProviderAutoSave(100);
+    } else if (action === 'set-fission-mode') {
+        const provider = ensureDecompilerProvider('fission');
+        withFissionContract(provider);
+        provider.options.mode = e.target.dataset.mode === 'vanilla' ? 'vanilla' : 'roblox';
+        openDecompilerProviderModal('fission');
+        scheduleDecompilerProviderAutoSave(100);
     }
 });
 $('decompilerProviderBody').addEventListener('input', (e) => {
@@ -3586,7 +3693,7 @@ $('decompilerProviderBody').addEventListener('change', (e) => {
 });
 document.addEventListener('click', (e) => {
     if (!$('settingsAddDecompilerMenu').contains(e.target) && !$('settingsAddDecompilerBtn').contains(e.target)) {
-        $('settingsAddDecompilerMenu').classList.remove('open');
+        closeDecompilerAddMenu();
     }
 });
 async function showConfirmDialog({ title, desc }) {

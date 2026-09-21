@@ -820,3 +820,212 @@ test("semantic index status formatting uses the canonical completeness value", (
     "Semantic index ready: 0/0 chunks embedded."
   );
 });
+
+test("legacy Fission endpoints migrate onto the current /decompile contract", () => {
+  const settings = normalizeDecompilerSettingsInput({
+    providers: {
+      fission: {
+        enabled: true,
+        endpoint: "http://localhost:3001/luau/decompile",
+        options: {},
+      },
+    },
+    runtime: {
+      providerTimeoutsMs: { fission: 6000 },
+    },
+  });
+
+  assert.equal(settings.providers.fission.endpoint, "http://localhost:8080/decompile");
+  assert.equal(settings.providers.fission.options.mode, "roblox");
+  assert.equal(settings.providers.fission.options.inferRobloxTypes, true);
+  assert.equal(settings.runtime.providerTimeoutsMs.fission, 35000);
+  assert.equal(settings.runtime.overallTimeoutMs, 40000);
+
+  const customPort = normalizeDecompilerSettingsInput({
+    providers: {
+      fission: { endpoint: "http://localhost:3004/luau/decompile" },
+    },
+  });
+  assert.equal(customPort.providers.fission.endpoint, "http://localhost:3004/decompile");
+});
+
+test("Fission posts JSON bytecode and reads decompilationOutput", async (t) => {
+  const bytecode = Buffer.from("fission-bytecode");
+  let receivedUrl = "";
+  let receivedBody = "";
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    receivedUrl = String(url);
+    receivedBody = String(init?.body || "");
+    assert.equal(new Headers(init?.headers).get("Content-Type"), "application/json");
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        extra: "ignored",
+        result: {
+          decompilationOutput: "return 1\n",
+          irOutput: "",
+          timingStatistics: "",
+          resultCode: "Success",
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  });
+
+  const settings = normalizeDecompilerSettingsInput({
+    providerOrder: ["fission"],
+    providers: {
+      builtin: { enabled: false },
+      luaexpert: { enabled: false },
+      shiny: { enabled: false },
+      luacid: { enabled: false },
+      oracle: { enabled: false },
+      konstant: { enabled: false },
+      fission: {
+        enabled: true,
+        endpoint: "http://127.0.0.1:3004/decompile",
+        options: {
+          mode: "roblox",
+          inferTypes: true,
+          optimizeIR: false,
+          inferRobloxTypes: true,
+          autoNameVariables: true,
+          omitFissionComments: false,
+        },
+      },
+      custom: { enabled: false },
+    },
+    runtime: {
+      overallTimeoutMs: 35000,
+      adaptiveFallback: false,
+      providerTimeoutsMs: { fission: 20000 },
+    },
+  });
+
+  const result = await decompileBytecode(settings, {
+    bytecodeBase64: bytecode.toString("base64"),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.providerId, "fission");
+  assert.equal(result.source, "-- Decompiled with Fission\nreturn 1\n");
+  assert.equal(receivedUrl, "http://127.0.0.1:3004/decompile");
+  assert.deepEqual(JSON.parse(receivedBody), {
+    mode: "roblox",
+    bytecode: bytecode.toString("base64"),
+    flags: {
+      inferTypes: true,
+      inferRobloxTypes: true,
+      autoNameVariables: true,
+    },
+    timeout: 20,
+  });
+});
+
+test("Fission maps documented HTTP errors without treating missing source as success", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => {
+    return new Response(JSON.stringify({ ok: false, error: "Invalid base64 encoding" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  const settings = normalizeDecompilerSettingsInput({
+    providerOrder: ["fission"],
+    providers: {
+      builtin: { enabled: false },
+      luaexpert: { enabled: false },
+      shiny: { enabled: false },
+      luacid: { enabled: false },
+      oracle: { enabled: false },
+      konstant: { enabled: false },
+      fission: { enabled: true, endpoint: "http://127.0.0.1:3004/decompile" },
+      custom: { enabled: false },
+    },
+    runtime: { adaptiveFallback: false },
+  });
+  const failed = await decompileBytecode(settings, {
+    bytecodeBase64: Buffer.from("bad").toString("base64"),
+  });
+  assert.equal(failed.ok, false);
+  assert.match(failed.error ?? "", /HTTP 400: Invalid base64 encoding/);
+
+  t.mock.method(globalThis, "fetch", async () => {
+    return new Response(JSON.stringify({ ok: true, unexpected: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  const protocol = await decompileBytecode(settings, {
+    bytecodeBase64: Buffer.from("bad").toString("base64"),
+  });
+  assert.equal(protocol.ok, false);
+  assert.match(protocol.error ?? "", /missing result/);
+});
+
+test("Fission transport failures do not put the provider in cooldown", () => {
+  recordDecompilerProviderFailure({
+    id: "fission",
+    errorMessage: "fetch failed",
+    runtime: DEFAULT_DECOMPILER_RUNTIME_SETTINGS,
+    clientId: "fission-transport",
+  });
+  const settings = structuredClone(DEFAULT_DECOMPILER_SETTINGS);
+  settings.providers.fission.enabled = true;
+  settings.providerOrder = ["fission"];
+  assert.deepEqual(
+    resolveDecompilerProviders(settings, { clientId: "fission-transport" }).orderedProviders,
+    ["fission"]
+  );
+});
+
+test("placeholder decompiler output is not stored in the script source cache", () => {
+  const id = identity("placeholder-cache");
+  upsertScriptSources(id, {
+    scripts: [
+      {
+        debugId: "bad",
+        path: "ArchivesClock",
+        source: "-- failed to decompile script or decompiler server not active",
+        scriptHash: "poison",
+      },
+      { debugId: "good", path: "Ok", source: "return 1", scriptHash: "ok" },
+    ],
+  });
+  assert.equal(getCachedScriptSourcesByScriptHash(id, ["poison"]).length, 0);
+  assert.equal(getCachedScriptSourcesByScriptHash(id, ["ok"])[0]?.source, "return 1");
+  assert.equal(getScriptSourceIndex(id).scripts.length, 1);
+  clearScriptSourceIndex(id.clientId);
+});
+
+test("placeholder decompiler output is not stored as source", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        result: {
+          decompilationOutput: "-- failed to decompile script or decompiler server not active",
+          resultCode: "Success",
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  });
+  const settings = normalizeDecompilerSettingsInput({
+    providerOrder: ["fission"],
+    providers: {
+      builtin: { enabled: false },
+      luaexpert: { enabled: false },
+      shiny: { enabled: false },
+      luacid: { enabled: false },
+      oracle: { enabled: false },
+      konstant: { enabled: false },
+      fission: { enabled: true, endpoint: "http://127.0.0.1:3004/decompile" },
+      custom: { enabled: false },
+    },
+    runtime: { adaptiveFallback: false },
+  });
+  const result = await decompileBytecode(settings, {
+    bytecodeBase64: Buffer.from("script").toString("base64"),
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? "", /failed to decompile script or decompiler server not active/);
+});

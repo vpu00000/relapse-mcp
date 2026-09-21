@@ -549,6 +549,7 @@ e.statusDirty=true
 e.disabled=false
 e.clientId=f
 e.scriptHashByDebugId={}
+e.sourceCacheByHash={}
 e.sourceCacheCheckedByHash={}
 e.initialScanRunning=false
 e.initialScanFinished=false
@@ -1159,9 +1160,21 @@ end
 return true,x
 end
 
+local function IsUnusableDecompiledSource(t)
+if type(t)~="string"then return true end
+local u=string.gsub(t,"^%s+","")
+u=string.gsub(u,"%s+$","")
+if u==""then return true end
+local v=string.lower(u)
+if string.find(v,"failed to decompile",1,true)then return true end
+if string.find(v,"decompiler server not active",1,true)then return true end
+if string.find(v,"decompiler is not active",1,true)then return true end
+return false
+end
+
 local function RememberScriptSourceForHash(t,u)
 if type(t)~="string"or t==""then return false end
-if type(u)~="string"or u==""then return false end
+if IsUnusableDecompiledSource(u)then return false end
 
 c.sourceCacheByHash[t]=u
 c.sourceCacheCheckedByHash[t]=true
@@ -1289,7 +1302,7 @@ if not v then
 local y=tostring(w or"Built-in decompile failed.")
 return nil,x,y,string.find(y,"Timed out",1,true)~=nil
 end
-if type(w)~="string"or w==""then
+if type(w)~="string"or w==""or IsUnusableDecompiledSource(w)then
 return nil,x,"Built-in decompile returned no source.",false
 end
 
@@ -1480,6 +1493,9 @@ C=B.attemptedProviders[1]
 end
 
 if B.ok==true and type(B.source)=="string"and B.source~=""then
+if IsUnusableDecompiledSource(B.source)then
+return nil,B.source,false,C
+end
 return f(B.source),nil,false,C
 end
 if B.needsBuiltin==true and B.providerId=="builtin"then
@@ -1507,11 +1523,15 @@ end
 
 local A=z and c.sourceCacheByHash[z]or nil
 if A then
+if IsUnusableDecompiledSource(A)then
+c.sourceCacheByHash[z]=nil
+else
 return{
 debugId=y,
 scriptHash=z,
 source=A,
 }
+end
 end
 
 local B=RefreshDecompilerPlan(false,v,w)

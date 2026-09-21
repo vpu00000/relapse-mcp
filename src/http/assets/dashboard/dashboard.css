@@ -1507,18 +1507,29 @@ body[data-has-background-media="true"] .sidebar {
     background: var(--surface-hover);
 }
 .settings-add-provider-btn:active { transform: translateY(1px); }
+.settings-card--decompiler {
+    overflow: visible;
+}
+.settings-card--decompiler > .settings-card-footer {
+    border-bottom-left-radius: var(--radius-lg);
+    border-bottom-right-radius: var(--radius-lg);
+}
 .settings-add-provider-menu {
     position: absolute;
     right: 0;
     top: calc(100% + 8px);
     width: 260px;
+    max-height: min(420px, calc(100vh - 96px));
     padding: 7px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--surface);
     box-shadow: 0 18px 50px var(--shadow);
     display: none;
-    z-index: 20;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    z-index: 40;
 }
 .settings-add-provider-menu.open {
     display: grid;
@@ -1980,6 +1991,23 @@ body.decompiler-drag-active * {
 .decompiler-advanced-grid[hidden] { display: none; }
 .decompiler-advanced-grid .settings-field {
     margin-bottom: 0;
+}
+.decompiler-flag-list {
+    display: grid;
+    gap: 8px;
+}
+.decompiler-flag {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    cursor: pointer;
+}
+.decompiler-flag input {
+    margin: 0;
+    accent-color: var(--blue);
 }
 .decompiler-provider-body textarea {
     min-height: 112px;

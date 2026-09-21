@@ -778,6 +778,54 @@ test("decompiler add menu shows one custom provider creation option", async () =
   );
 });
 
+test("adding a decompiler provider persists even when its settings modal opens", async () => {
+  const [dashboardScript, dashboardCss, dashboardHtml] = await Promise.all([
+    fs.readFile(path.join(repoRoot, "src", "http", "assets", "dashboard", "dashboard.js"), "utf8"),
+    fs.readFile(path.join(repoRoot, "src", "http", "assets", "dashboard", "dashboard.css"), "utf8"),
+    fs.readFile(path.join(repoRoot, "src", "http", "assets", "dashboard", "index.html"), "utf8"),
+  ]);
+
+  const activate = dashboardScript.slice(
+    dashboardScript.indexOf("function activateDecompilerProvider("),
+    dashboardScript.indexOf("function removeDecompilerProvider(")
+  );
+  assert.match(activate, /scheduleDecompilerAutoSave\(\)/);
+
+  const addMenuClick = dashboardScript.slice(
+    dashboardScript.indexOf("$('settingsAddDecompilerMenu').addEventListener('click'"),
+    dashboardScript.indexOf("$('settingsDecompilerList').addEventListener('click'")
+  );
+  assert.match(addMenuClick, /id === 'luacid'/);
+  assert.match(addMenuClick, /scheduleDecompilerProviderAutoSave\(0\)/);
+  assert.match(
+    dashboardCss,
+    /\.settings-add-provider-menu\s*\{[^}]*position:\s*absolute/s
+  );
+  assert.match(
+    dashboardCss,
+    /\.settings-add-provider-menu\s*\{[^}]*overflow-y:\s*auto/s
+  );
+  assert.match(dashboardCss, /\.settings-card--decompiler\s*\{[^}]*overflow:\s*visible/s);
+  assert.match(dashboardHtml, /settings-card--decompiler/);
+});
+
+test("dashboard exposes Fission JSON contract controls", async () => {
+  const dashboardScript = await fs.readFile(
+    path.join(repoRoot, "src", "http", "assets", "dashboard", "dashboard.js"),
+    "utf8"
+  );
+
+  assert.match(dashboardScript, /http:\/\/localhost:8080\/decompile/);
+  assert.match(dashboardScript, /FISSION_LEGACY_LOCAL_ENDPOINT/);
+  assert.match(dashboardScript, /decompilerModalFissionInferTypes/);
+  assert.match(dashboardScript, /decompilerModalFissionInferRobloxTypes/);
+  assert.match(dashboardScript, /data-action="set-fission-mode"/);
+  assert.equal(
+    [...dashboardScript.matchAll(/http:\/\/localhost:3001\/luau\/decompile/g)].length,
+    1
+  );
+});
+
 test("dashboard exposes Luacid transport, options, and both key links", async () => {
   const dashboardScript = await fs.readFile(
     path.join(repoRoot, "src", "http", "assets", "dashboard", "dashboard.js"),

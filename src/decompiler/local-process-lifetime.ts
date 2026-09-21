@@ -341,7 +341,7 @@ export function trackLocalDecompilerProcess(
     };
     watchdog.once("error", watchdogFailed);
     watchdog.once("exit", watchdogExited);
-    const supervisionDeadline = Date.now() + 2_000;
+    const supervisionDeadline = Date.now() + 10_000;
     supervisionTimer = setInterval(() => {
       if (readyPath && fs.existsSync(readyPath)) {
         clearInterval(supervisionTimer);
@@ -349,7 +349,7 @@ export function trackLocalDecompilerProcess(
         fs.rmSync(readyPath, { force: true });
         watchdog.removeListener("exit", watchdogExited);
       } else if (Date.now() >= supervisionDeadline) {
-        watchdogFailed(new Error("watchdog did not initialize within 2 seconds"));
+        watchdogFailed(new Error("watchdog did not initialize within 10 seconds"));
       }
     }, 25);
     supervisionTimer.unref();

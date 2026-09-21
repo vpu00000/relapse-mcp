@@ -142,6 +142,21 @@ function rateLimitedError(errorMessage: string, statusCode?: number): boolean {
   return text.includes("429") || text.includes("rate limit") || text.includes("ratelimit");
 }
 
+function transportError(errorMessage: string): boolean {
+  const text = errorMessage.toLowerCase();
+  return (
+    text.includes("fetch failed") ||
+    text.includes("econnrefused") ||
+    text.includes("econnreset") ||
+    text.includes("enotfound") ||
+    text.includes("etimedout") ||
+    text.includes("socket") ||
+    text.includes("network") ||
+    text.includes("other side closed") ||
+    text.includes("connect ")
+  );
+}
+
 function toSnapshot(
   health: DecompilerProviderHealthState,
   now: number
@@ -413,6 +428,9 @@ export function recordDecompilerProviderFailure(options: {
   } else if (rateLimitedError(options.errorMessage, options.statusCode)) {
     health.rateLimitedUntilMs = now + cooldownMs;
     health.status = "rate_limited";
+  } else if (transportError(options.errorMessage)) {
+    health.failureCount += 1;
+    health.status = "unknown";
   } else {
     health.failureCount += 1;
     health.status = "cooling_down";
