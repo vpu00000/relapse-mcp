@@ -14,6 +14,7 @@ local ScriptHashTimeoutSeconds = 2
 local BytecodeTimeoutSeconds = 3
 local BuiltInDecompileTimeoutSeconds = 8
 local ServerDecompileTimeoutSeconds = 65
+local UnusableSourceScanChars = 1024
 local DecompilerPlan = {
     providerId = nil,
     expiresAt = 0,
@@ -56,14 +57,30 @@ local function RunWithTimeout(timeoutSeconds, callback)
 end
 
 local function IsUnusableDecompiledSource(source)
-    if type(source) ~= "string" then return true end
-    local trimmed = string.gsub(source, "^%s+", "")
-    trimmed = string.gsub(trimmed, "%s+$", "")
-    if trimmed == "" then return true end
-    local lowered = string.lower(trimmed)
-    if string.find(lowered, "failed to decompile", 1, true) then return true end
-    if string.find(lowered, "decompiler server not active", 1, true) then return true end
-    if string.find(lowered, "decompiler is not active", 1, true) then return true end
+    if type(source) ~= "string" then
+        return true
+    end
+
+    local firstContent = string.find(source, "%S")
+    if not firstContent then
+        return true
+    end
+
+    local scanEnd = firstContent + UnusableSourceScanChars - 1
+    local lowered = string.lower(string.sub(source, firstContent, scanEnd))
+
+    if string.find(lowered, "failed to decompile", 1, true) then
+        return true
+    end
+
+    if string.find(lowered, "decompiler server not active", 1, true) then
+        return true
+    end
+
+    if string.find(lowered, "decompiler is not active", 1, true) then
+        return true
+    end
+
     return false
 end
 
