@@ -5,6 +5,15 @@ local WebSocketAvailable = context.WebSocketAvailable
 local GetRegistrationInfo = context.GetRegistrationInfo
 local SanitizeForOutput = context.SanitizeForOutput
 local LuaEncode = context.LuaEncode
+local WebSocketConnectTimeout = 5
+local WebSocketRegisterTimeout = 5
+local WebSocketPingInterval = 5
+local WebSocketStaleTimeout = 20
+local WebSocketShortSessionSeconds = 30
+local WebSocketMaxFailures = 3
+local WebSocketRetryAfterSeconds = 300
+local HttpMaxPollFailures = 5
+local TransportState = { webSocketFailures = 0, httpOnlyUntil = 0 }
 
 --// Base Bridge Class \\--
 local BaseBridge = {}; do
@@ -117,28 +126,30 @@ local BaseBridge = {}; do
     end
 end
 
+local function WaitForServer(bridge)
+    local retryDelay = 0.5
+    local maxRetryDelay = 5
+    local maxAttempts = 10
+    local attempts = 0
+
+    while not bridge:IsAlive() do
+        attempts += 1
+        if attempts >= maxAttempts then
+            error("Failed to connect to bridge server after " .. maxAttempts .. " attempts")
+        end
+        task.wait(retryDelay)
+        retryDelay = math.min(retryDelay * 1.5, maxRetryDelay)
+    end
+end
+
 --// WebSocket Bridge \\--
 local WebSocketBridge = setmetatable({}, {__index = BaseBridge}); do
     WebSocketBridge.__index = WebSocketBridge
-    
+
     function WebSocketBridge.new()
         local self = setmetatable({}, WebSocketBridge)
-    
-        --// Yield until the server is alive with exponential backoff \\--
-        local retryDelay = 0.5
-        local maxRetryDelay = 5
-        local maxAttempts = 10
-        local attempts = 0
-        
-        while not self:IsAlive() do
-            attempts += 1
-            if attempts >= maxAttempts then
-                error("Failed to connect to bridge server after " .. maxAttempts .. " attempts")
-            end
-            task.wait(retryDelay)
-            retryDelay = math.min(retryDelay * 1.5, maxRetryDelay)
-        end
-    
+        WaitForServer(self)
+
         --// Connect to the server with timeout \\--
         local wsConnection = nil
         local connectionThread = task.spawn(function()
@@ -149,77 +160,163 @@ local WebSocketBridge = setmetatable({}, {__index = BaseBridge}); do
                 wsConnection = result
             end
         end)
-        
+
         local connectionStart = os.clock()
-        repeat task.wait(0.05) until wsConnection ~= nil or os.clock() - connectionStart > 5
-        
+        repeat
+            task.wait(0.05)
+        until wsConnection ~= nil or os.clock() - connectionStart > WebSocketConnectTimeout
+
         if wsConnection == nil then
-            task.cancel(connectionThread)
-            error("WebSocket connection timed out after 5 seconds")
+            pcall(task.cancel, connectionThread)
+            error("WebSocket connection timed out after " .. WebSocketConnectTimeout .. " seconds")
         end
-        
+
         self.WebSocket = wsConnection
         self.Connected = true
         self.Callbacks = {}
         self.ClientId = nil
+        self.Transport = "ws"
+        self.ConnectedAt = os.clock()
+        self.LastReceivedAt = os.clock()
+        self.HeartbeatSupported = false
 
-        --// Send registration \\--
-        self.WebSocket:Send(HttpService:JSONEncode(GetRegistrationInfo()))
-
-        self.AliveThread = task.spawn(function()
-            local consecutiveFailures = 0
-            while task.wait(1) do
-                if not self.Connected then
-                    continue
-                end
-
-                if self:IsAlive() then
-                    consecutiveFailures = 0
-                    continue
-                end
-
-                consecutiveFailures += 1
-                if consecutiveFailures < 3 then
-                    continue
-                end
-                
-                self.Connected = false
-                break
-            end
-    
-            pcall(function()
-                self.WebSocket:Close()
-            end)
-        end)
-    
         --// On Message \\--
-        self.WebSocket.OnMessage:Connect(function(message)
-            local data = HttpService:JSONDecode(message)
+        self.MessageConnection = self.WebSocket.OnMessage:Connect(function(message)
+            self.LastReceivedAt = os.clock()
 
-            --// Handle registration response \\--
+            local decodedOk, data = pcall(HttpService.JSONDecode, HttpService, message)
+            if not decodedOk or type(data) ~= "table" then
+                return
+            end
+
             if data.type == "registered" then
                 self.ClientId = data.clientId
                 return
             end
 
-            local response = self:HandleMessage(data)
-            if response then
-                self.WebSocket:Send(HttpService:JSONEncode(response))
+            if data.type == "pong" then
+                self.HeartbeatSupported = true
+                return
             end
+
+            task.spawn(function()
+                local response = self:HandleMessage(data)
+                if response then
+                    self:Send(response)
+                end
+            end)
         end)
-    
+
         --// On Close \\--
-        self.WebSocket.OnClose:Connect(function()
+        self.CloseConnection = self.WebSocket.OnClose:Connect(function()
             self.Connected = false
         end)
-    
+
+        --// Send registration \\--
+        if not self:Send(GetRegistrationInfo()) then
+            self:Close()
+            error("Failed to send WebSocket registration.")
+        end
+
+        local registerStart = os.clock()
+        repeat
+            task.wait(0.05)
+        until (
+            self.ClientId ~= nil or
+            not self.Connected or
+            os.clock() - registerStart > WebSocketRegisterTimeout
+        )
+
+        if self.ClientId == nil then
+            self:Close()
+            error("WebSocket registration was not acknowledged.")
+        end
+
+        --// Heartbeat \\--
+        self.HeartbeatThread = task.spawn(function()
+            local consecutiveFailures = 0
+            while self.Connected do
+                task.wait(WebSocketPingInterval)
+                if not self.Connected then
+                    break
+                end
+
+                if not self:Send({ type = "ping" }) then
+                    self.Connected = false
+                    break
+                end
+
+                if self.HeartbeatSupported then
+                    if os.clock() - self.LastReceivedAt > WebSocketStaleTimeout then
+                        self.Connected = false
+                        break
+                    end
+                elseif os.clock() - self.LastReceivedAt > WebSocketStaleTimeout then
+                    if self:IsAlive() then
+                        consecutiveFailures = 0
+                    else
+                        consecutiveFailures += 1
+                        if consecutiveFailures >= 3 then
+                            self.Connected = false
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+
         return self
     end
-    
+
+    function WebSocketBridge:Send(payload)
+        if not self.Connected then
+            return false
+        end
+
+        local encodedOk, encoded = pcall(HttpService.JSONEncode, HttpService, payload)
+        if not encodedOk then
+            return false
+        end
+
+        local sentOk = pcall(function()
+            self.WebSocket:Send(encoded)
+        end)
+        if not sentOk then
+            self.Connected = false
+        end
+
+        return sentOk
+    end
+
+    function WebSocketBridge:Close()
+        self.Connected = false
+
+        if self.HeartbeatThread and coroutine.running() ~= self.HeartbeatThread then
+            pcall(task.cancel, self.HeartbeatThread)
+        end
+
+        if self.MessageConnection then
+            pcall(function()
+                self.MessageConnection:Disconnect()
+            end)
+        end
+
+        if self.CloseConnection then
+            pcall(function()
+                self.CloseConnection:Disconnect()
+            end)
+        end
+
+        pcall(function()
+            self.WebSocket:Close()
+        end)
+    end
+
     function WebSocketBridge:WaitForDisconnect()
         while self.Connected do
             task.wait(0.1)
         end
+        self:Close()
     end
 end
 
@@ -229,70 +326,35 @@ local HTTPBridge = setmetatable({}, {__index = BaseBridge}); do
     
     function HTTPBridge.new()
         local self = setmetatable({}, HTTPBridge)
-    
-        --// Yield until the server is alive with exponential backoff \\--
-        local retryDelay = 0.5
-        local maxRetryDelay = 5
-        local maxAttempts = 10
-        local attempts = 0
-        
-        while not self:IsAlive() do
-            attempts += 1
-            if attempts >= maxAttempts then
-                error("Failed to connect to bridge server after " .. maxAttempts .. " attempts")
-            end
-            task.wait(retryDelay)
-            retryDelay = math.min(retryDelay * 1.5, maxRetryDelay)
-        end
-    
+        WaitForServer(self)
+
         self.Connected = true
         self.Callbacks = {}
         self.PollInterval = 0.1
         self.ClientId = nil
+        self.Transport = "http"
 
-        --// Register with the server \\--
-        pcall(function()
-            local regResponse = request({
-                Url = "http://" .. BridgeURL .. "/register",
-                Method = "POST",
-                Headers = { ["Content-Type"] = "application/json" },
-                Body = HttpService:JSONEncode(GetRegistrationInfo()),
-            })
-            if regResponse.StatusCode == 200 and regResponse.Body then
-                local regData = HttpService:JSONDecode(regResponse.Body)
-                self.ClientId = regData.clientId
-            end
-        end)
-    
+        if not self:Register() then
+            self.Connected = false
+            error("Failed to register with the bridge server over HTTP.")
+        end
+
         --// Start polling thread \\--
         self.PollThread = task.spawn(function()
             local consecutiveFailures = 0
-            
+
             while self.Connected do
                 local gotCommands = false
-                local success, _ = pcall(function()
-                    local pollUrl = "http://" .. BridgeURL .. "/poll"
-                    if self.ClientId then
-                        pollUrl = pollUrl .. "?clientId=" .. self.ClientId
-                    end
+                local success, statusCode = pcall(function()
                     local response = request({
-                        Url = pollUrl,
+                        Url = "http://" .. BridgeURL .. "/poll?clientId=" .. HttpService:UrlEncode(self.ClientId),
                         Method = "GET"
                     })
 
-                    --// Server might be down \\--
                     if response.StatusCode ~= 204 and response.StatusCode ~= 200 then
-                        consecutiveFailures += 1
-                        if consecutiveFailures >= 3 then
-                            self.Connected = false
-                        end
-
-                        return
+                        return response.StatusCode
                     end
-                    
-                    consecutiveFailures = 0
-    
-                    --// Handle response \\--
+
                     if response.Body and response.Body ~= "" then
                         local data = HttpService:JSONDecode(response.Body)
                         local commands = {}
@@ -306,38 +368,95 @@ local HTTPBridge = setmetatable({}, {__index = BaseBridge}); do
                             gotCommands = true
                             task.spawn(function()
                                 local result = self:HandleMessage(command)
-                                if result == nil then return end
+                                if result == nil then
+                                    return
+                                end
 
-                                --// Send response back \\--
-                                request({
-                                    Url = "http://" .. BridgeURL .. "/respond",
-                                    Method = "POST",
-                                    Headers = {
-                                        ["Content-Type"] = "application/json"
-                                    },
-                                    Body = HttpService:JSONEncode(result)
-                                })
+                                self:Respond(result)
                             end)
                         end
                     end
+
+                    return response.StatusCode
                 end)
-    
-                if not success then
+
+                if success and (statusCode == 200 or statusCode == 204) then
+                    consecutiveFailures = 0
+                elseif success and statusCode == 404 then
+                    self.Connected = false
+                    break
+                else
                     consecutiveFailures += 1
-                    if consecutiveFailures >= 3 then
+                    if consecutiveFailures >= HttpMaxPollFailures then
                         self.Connected = false
+                        break
                     end
+
+                    task.wait(math.min(0.25 * 2 ^ consecutiveFailures, 4))
                 end
-    
+
+                if self.RetryWebSocketAt and os.clock() >= self.RetryWebSocketAt then
+                    self.Connected = false
+                    break
+                end
+
                 if not gotCommands then
                     task.wait(self.PollInterval)
                 end
             end
         end)
-    
+
         return self
     end
-    
+
+    function HTTPBridge:Register()
+        local ok, clientId = pcall(function()
+            local regResponse = request({
+                Url = "http://" .. BridgeURL .. "/register",
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = HttpService:JSONEncode(GetRegistrationInfo()),
+            })
+            if regResponse.StatusCode ~= 200 or not regResponse.Body then
+                return nil
+            end
+
+            local regData = HttpService:JSONDecode(regResponse.Body)
+            if type(regData) ~= "table" or type(regData.clientId) ~= "string" then
+                return nil
+            end
+
+            return regData.clientId
+        end)
+
+        if not ok or clientId == nil then
+            return false
+        end
+
+        self.ClientId = clientId
+        return true
+    end
+
+    function HTTPBridge:Respond(result)
+        local body = HttpService:JSONEncode(result)
+
+        for attempt = 1, 3 do
+            local ok, response = pcall(request, {
+                Url = "http://" .. BridgeURL .. "/respond",
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = body,
+            })
+            if ok and type(response) == "table" and response.StatusCode == 200 then
+                return true
+            end
+
+            task.wait(0.25 * attempt)
+        end
+
+        return false
+    end
+
     function HTTPBridge:WaitForDisconnect()
         while self.Connected do
             task.wait(0.1)
@@ -346,21 +465,51 @@ local HTTPBridge = setmetatable({}, {__index = BaseBridge}); do
 end
 
 --// Create Bridge \\--
+local function CanUseWebSocket()
+    return WebSocketAvailable and os.clock() >= TransportState.httpOnlyUntil
+end
+
+local function RecordWebSocketFailure()
+    TransportState.webSocketFailures += 1
+
+    if TransportState.webSocketFailures >= WebSocketMaxFailures then
+        TransportState.webSocketFailures = 0
+        TransportState.httpOnlyUntil = os.clock() + WebSocketRetryAfterSeconds
+    end
+end
+
+local function RecordBridgeEnded(bridge)
+    if bridge.Transport ~= "ws" then
+        return
+    end
+
+    if os.clock() - bridge.ConnectedAt < WebSocketShortSessionSeconds then
+        RecordWebSocketFailure()
+    else
+        TransportState.webSocketFailures = 0
+    end
+end
+
 local function CreateBridge()
-    if WebSocketAvailable then
-        local success, bridge = pcall(function()
-            return WebSocketBridge.new()
-        end)
-        
+    if CanUseWebSocket() then
+        local success, bridge = pcall(WebSocketBridge.new)
         if success then
             return bridge
         end
+
+        RecordWebSocketFailure()
     end
 
-    return HTTPBridge.new()
+    local bridge = HTTPBridge.new()
+    if WebSocketAvailable then
+        bridge.RetryWebSocketAt = math.max(TransportState.httpOnlyUntil, os.clock() + 60)
+    end
+
+    return bridge
 end
 
 return {
     CreateBridge = CreateBridge,
+    RecordBridgeEnded = RecordBridgeEnded,
 }
 end

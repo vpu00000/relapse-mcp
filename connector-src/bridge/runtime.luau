@@ -8,13 +8,30 @@ local ResetScriptMappingState = context.ResetScriptMappingState
 local StartScriptMapping = context.StartScriptMapping
 local StartFailedScriptResync = context.StartFailedScriptResync
 local ResumeDeferredScriptMappings = context.ResumeDeferredScriptMappings
+local RecordBridgeEnded = context.RecordBridgeEnded
+local registrars = {
+    require("./handlers/core"),
+    require("./handlers/scripts"),
+    require("./handlers/instances"),
+    require("./handlers/remote-spy/logs"),
+    require("./handlers/remote-spy/control"),
+    require("./handlers/input"),
+}
+local reconnectDelay = 1
+
 --// Main Loop \\--
 while true do
     local success, Bridge = pcall(CreateBridge)
-    
+
     if not success then
-        task.wait(3)
+        task.wait(reconnectDelay)
+        reconnectDelay = math.min(reconnectDelay * 2, 10)
         continue
+    end
+    reconnectDelay = 1
+
+    for _, registerHandlers in registrars do
+        registerHandlers(context, Bridge)
     end
 
     local clientId = WaitForBridgeClientId(Bridge)
@@ -39,19 +56,8 @@ while true do
         end
     end
 
-    local registrars = {
-        require("./handlers/core"),
-        require("./handlers/scripts"),
-        require("./handlers/instances"),
-        require("./handlers/remote-spy/logs"),
-        require("./handlers/remote-spy/control"),
-        require("./handlers/input"),
-    }
-    for _, registerHandlers in registrars do
-        registerHandlers(context, Bridge)
-    end
-
     Bridge:WaitForDisconnect()
+    RecordBridgeEnded(Bridge)
 
     if ScriptMappingPipeline.bridge == Bridge then
         ScriptMappingPipeline.bridge = nil

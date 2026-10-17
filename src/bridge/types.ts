@@ -13,6 +13,7 @@ export interface RobloxClient {
   transport: "ws" | "http";
   ws?: WebSocket;
   lastHttpPoll: number;
+  disconnectedAt?: number;
   pendingHttpCommands: string[];
   pendingPollResolve: ((commands: string[]) => void) | null;
 }
