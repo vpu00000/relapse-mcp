@@ -9,6 +9,7 @@ import { clearDecompilerHealthForClient } from "../../../decompiler/health.js";
 const clientRegistry: Map<string, RobloxClient> = new Map();
 const wsToClientId: Map<WebSocket, string> = new Map();
 const HTTP_CLIENT_RETENTION_MS = HTTP_POLL_TIMEOUT * 2;
+export const WS_CLIENT_RETENTION_MS = 60000;
 
 let activeClientId: string | undefined = undefined;
 let activeClientIsRemote = false;
@@ -49,14 +50,43 @@ function removeClient(clientId: string, reason: string): void {
   console.error(`[Registry] Client ${reason}: ${clientId}`);
 }
 
+function isClientExpired(entry: RobloxClient, now: number): boolean {
+  if (entry.transport === "http") {
+    return now - entry.lastHttpPoll >= HTTP_CLIENT_RETENTION_MS;
+  }
+
+  if (entry.disconnectedAt === undefined) {
+    return false;
+  }
+
+  return now - entry.disconnectedAt >= WS_CLIENT_RETENTION_MS;
+}
+
 export function cleanupInactiveHttpClients(now = Date.now()): number {
   let removed = 0;
   for (const [clientId, entry] of clientRegistry) {
-    if (entry.transport !== "http" || now - entry.lastHttpPoll < HTTP_CLIENT_RETENTION_MS) continue;
+    if (!isClientExpired(entry, now)) {
+      continue;
+    }
+
     removeClient(clientId, "expired");
     removed += 1;
   }
+
   return removed;
+}
+
+export function detachClientSocket(clientId: string, ws: WebSocket): void {
+  wsToClientId.delete(ws);
+
+  const entry = clientRegistry.get(clientId);
+  if (!entry || entry.ws !== ws) {
+    return;
+  }
+
+  entry.ws = undefined;
+  entry.disconnectedAt = Date.now();
+  console.error(`[Registry] Client socket closed, keeping session for reconnect: ${clientId}`);
 }
 
 const cleanupTimer = setInterval(cleanupInactiveHttpClients, HTTP_POLL_TIMEOUT);
@@ -143,6 +173,7 @@ export function registerClient(info: {
     existing.transport = info.transport;
     existing.ws = info.ws;
     existing.lastHttpPoll = Date.now();
+    existing.disconnectedAt = undefined;
     existing.pendingPollResolve = null;
 
     if (info.ws) {

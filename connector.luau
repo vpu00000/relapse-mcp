@@ -5,363 +5,512 @@ local e=b.WebSocketAvailable
 local f=b.GetRegistrationInfo
 local g=b.SanitizeForOutput
 local h=b.LuaEncode
+local i=5
+local j=5
+local k=5
+local l=20
+local m=30
+local n=3
+local o=300
+local p=5
+local q={webSocketFailures=0,httpOnlyUntil=0}
 
 
-local i={};do
-i.__index=i
+local r={};do
+r.__index=r
 
-function i.BindToType(j,k,l)
-j.Callbacks[k]=l
+function r.BindToType(s,t,u)
+s.Callbacks[t]=u
 end
 
-function i.BindToTypeRaw(j,k,l)
-j.Callbacks[k]=l
-j.RawCallbacks=j.RawCallbacks or{}
-j.RawCallbacks[k]=true
+function r.BindToTypeRaw(s,t,u)
+s.Callbacks[t]=u
+s.RawCallbacks=s.RawCallbacks or{}
+s.RawCallbacks[t]=true
 end
 
-function i.CreateAlias(j,k,l)
-for m,n in l do
-j.Callbacks[n]=j.Callbacks[k]
-if j.RawCallbacks and j.RawCallbacks[k]then
-j.RawCallbacks[n]=true
+function r.CreateAlias(s,t,u)
+for v,w in u do
+s.Callbacks[w]=s.Callbacks[t]
+if s.RawCallbacks and s.RawCallbacks[t]then
+s.RawCallbacks[w]=true
 end
 end
 end
 
-function i.HandleMessage(j,k)
-if j.Callbacks[k.type]then
-local l,m=pcall(function()
-return j.Callbacks[k.type](k)
+function r.HandleMessage(s,t)
+if s.Callbacks[t.type]then
+local u,v=pcall(function()
+return s.Callbacks[t.type](t)
 end)
 
-if l and m==nil then
+if u and v==nil then
 return nil
 end
 
-if not l then
-return j:FormatResponse(m,k.id,true)
+if not u then
+return s:FormatResponse(v,t.id,true)
 end
 
-if j.RawCallbacks and j.RawCallbacks[k.type]then
+if s.RawCallbacks and s.RawCallbacks[t.type]then
 return{
-output=tostring(m),
+output=tostring(v),
 success=true,
-id=k.id
+id=t.id
 }
 end
 
-return j:FormatResponse(m,k.id,false)
+return s:FormatResponse(v,t.id,false)
 end
 return nil
 end
 
-function i.FormatResponse(j,k,l,m)
-if m then
+function r.FormatResponse(s,t,u,v)
+if v then
 return{
-error=tostring(k),
+error=tostring(t),
 success=false,
-id=l
+id=u
 }
 end
 
-local n=g(k)
-if typeof(n)~="table"then
-n={n}
+local w=g(t)
+if typeof(w)~="table"then
+w={w}
 end
 
 return{
-output=h(n,{
+output=h(w,{
 Prettify=false
 }),
 success=true,
-id=l
+id=u
 }
 end
 
-function i.IsAlive(j)
-local k,l=pcall(function()
-local k
-local l=task.spawn(function()
-local l,m=pcall(request,{
+function r.IsAlive(s)
+local t,u=pcall(function()
+local t
+local u=task.spawn(function()
+local u,v=pcall(request,{
 Url="http://"..d,
 Method="GET"
 })
 
-if l then
-k=m
+if u then
+t=v
 end
 end)
 
-local m=os.clock()
-repeat task.wait(0.05)until k~=nil or os.clock()-m>5
+local v=os.clock()
+repeat task.wait(0.05)until t~=nil or os.clock()-v>5
 
-if k==nil then
-task.cancel(l)
+if t==nil then
+task.cancel(u)
 return false
 end
 
 
-if k.StatusCode==426 or k.StatusCode==200 then
+if t.StatusCode==426 or t.StatusCode==200 then
 return true
 end
 
 return false
 end)
 
-if not k then
+if not t then
 return false
 end
 
-return l
+return u
+end
+end
+
+local function WaitForServer(s)
+local t=0.5
+local u=5
+local v=10
+local w=0
+
+while not s:IsAlive()do
+w+=1
+if w>=v then
+error("Failed to connect to bridge server after "..v.." attempts")
+end
+task.wait(t)
+t=math.min(t*1.5,u)
 end
 end
 
 
-local j=setmetatable({},{__index=i});do
-j.__index=j
+local s=setmetatable({},{__index=r});do
+s.__index=s
 
-function j.new()
-local k=setmetatable({},j)
-
-
-local l=0.5
-local m=5
-local n=10
-local o=0
-
-while not k:IsAlive()do
-o+=1
-if o>=n then
-error("Failed to connect to bridge server after "..n.." attempts")
-end
-task.wait(l)
-l=math.min(l*1.5,m)
-end
+function s.new()
+local t=setmetatable({},s)
+WaitForServer(t)
 
 
-local p
-local q=task.spawn(function()
-local q,r=pcall(function()
+local u
+local v=task.spawn(function()
+local v,w=pcall(function()
 return WebSocket.connect("ws://"..d)
 end)
-if q then
-p=r
+if v then
+u=w
 end
 end)
 
-local r=os.clock()
-repeat task.wait(0.05)until p~=nil or os.clock()-r>5
+local w=os.clock()
+repeat
+task.wait(0.05)
+until u~=nil or os.clock()-w>i
 
-if p==nil then
-task.cancel(q)
-error"WebSocket connection timed out after 5 seconds"
+if u==nil then
+pcall(task.cancel,v)
+error("WebSocket connection timed out after "..i.." seconds")
 end
 
-k.WebSocket=p
-k.Connected=true
-k.Callbacks={}
-k.ClientId=nil
+t.WebSocket=u
+t.Connected=true
+t.Callbacks={}
+t.ClientId=nil
+t.Transport="ws"
+t.ConnectedAt=os.clock()
+t.LastReceivedAt=os.clock()
+t.HeartbeatSupported=false
 
 
-k.WebSocket:Send(c:JSONEncode(f()))
+t.MessageConnection=t.WebSocket.OnMessage:Connect(function(x)
+t.LastReceivedAt=os.clock()
 
-k.AliveThread=task.spawn(function()
-local s=0
-while task.wait(1)do
-if not k.Connected then
-continue
-end
-
-if k:IsAlive()then
-s=0
-continue
-end
-
-s+=1
-if s<3 then
-continue
-end
-
-k.Connected=false
-break
-end
-
-pcall(function()
-k.WebSocket:Close()
-end)
-end)
-
-
-k.WebSocket.OnMessage:Connect(function(s)
-local t=c:JSONDecode(s)
-
-
-if t.type=="registered"then
-k.ClientId=t.clientId
+local y,z=pcall(c.JSONDecode,c,x)
+if not y or type(z)~="table"then
 return
 end
 
-local u=k:HandleMessage(t)
-if u then
-k.WebSocket:Send(c:JSONEncode(u))
+if z.type=="registered"then
+t.ClientId=z.clientId
+return
 end
+
+if z.type=="pong"then
+t.HeartbeatSupported=true
+return
+end
+
+task.spawn(function()
+local A=t:HandleMessage(z)
+if A then
+t:Send(A)
+end
+end)
 end)
 
 
-k.WebSocket.OnClose:Connect(function()
-k.Connected=false
+t.CloseConnection=t.WebSocket.OnClose:Connect(function()
+t.Connected=false
 end)
 
-return k
+
+if not t:Send(f())then
+t:Close()
+error"Failed to send WebSocket registration."
 end
 
-function j.WaitForDisconnect(k)
-while k.Connected do
-task.wait(0.1)
+local x=os.clock()
+repeat
+task.wait(0.05)
+until(
+t.ClientId~=nil or
+not t.Connected or
+os.clock()-x>j
+)
+
+if t.ClientId==nil then
+t:Close()
+error"WebSocket registration was not acknowledged."
+end
+
+
+t.HeartbeatThread=task.spawn(function()
+local y=0
+while t.Connected do
+task.wait(k)
+if not t.Connected then
+break
+end
+
+if not t:Send{type="ping"}then
+t.Connected=false
+break
+end
+
+if t.HeartbeatSupported then
+if os.clock()-t.LastReceivedAt>l then
+t.Connected=false
+break
+end
+elseif os.clock()-t.LastReceivedAt>l then
+if t:IsAlive()then
+y=0
+else
+y+=1
+if y>=3 then
+t.Connected=false
+break
 end
 end
 end
-
-
-local k=setmetatable({},{__index=i});do
-k.__index=k
-
-function k.new()
-local l=setmetatable({},k)
-
-
-local m=0.5
-local n=5
-local o=10
-local p=0
-
-while not l:IsAlive()do
-p+=1
-if p>=o then
-error("Failed to connect to bridge server after "..o.." attempts")
 end
-task.wait(m)
-m=math.min(m*1.5,n)
+end)
+
+return t
 end
 
-l.Connected=true
-l.Callbacks={}
-l.PollInterval=0.1
-l.ClientId=nil
+function s.Send(t,u)
+if not t.Connected then
+return false
+end
 
+local v,w=pcall(c.JSONEncode,c,u)
+if not v then
+return false
+end
+
+local x=pcall(function()
+t.WebSocket:Send(w)
+end)
+if not x then
+t.Connected=false
+end
+
+return x
+end
+
+function s.Close(t)
+t.Connected=false
+
+if t.HeartbeatThread and coroutine.running()~=t.HeartbeatThread then
+pcall(task.cancel,t.HeartbeatThread)
+end
+
+if t.MessageConnection then
+pcall(function()
+t.MessageConnection:Disconnect()
+end)
+end
+
+if t.CloseConnection then
+pcall(function()
+t.CloseConnection:Disconnect()
+end)
+end
 
 pcall(function()
-local q=request{
+t.WebSocket:Close()
+end)
+end
+
+function s.WaitForDisconnect(t)
+while t.Connected do
+task.wait(0.1)
+end
+t:Close()
+end
+end
+
+
+local t=setmetatable({},{__index=r});do
+t.__index=t
+
+function t.new()
+local u=setmetatable({},t)
+WaitForServer(u)
+
+u.Connected=true
+u.Callbacks={}
+u.PollInterval=0.1
+u.ClientId=nil
+u.Transport="http"
+
+if not u:Register()then
+u.Connected=false
+error"Failed to register with the bridge server over HTTP."
+end
+
+
+u.PollThread=task.spawn(function()
+local v=0
+
+while u.Connected do
+local w=false
+local x,y=pcall(function()
+local x=request{
+Url="http://"..d.."/poll?clientId="..c:UrlEncode(u.ClientId),
+Method="GET"
+}
+
+if x.StatusCode~=204 and x.StatusCode~=200 then
+return x.StatusCode
+end
+
+if x.Body and x.Body~=""then
+local y=c:JSONDecode(x.Body)
+local z={}
+if typeof(y)=="table"and y.type==nil and#y>0 then
+z=y
+elseif typeof(y)=="table"and y.type~=nil then
+z={y}
+end
+
+for A,B in ipairs(z)do
+w=true
+task.spawn(function()
+local C=u:HandleMessage(B)
+if C==nil then
+return
+end
+
+u:Respond(C)
+end)
+end
+end
+
+return x.StatusCode
+end)
+
+if x and(y==200 or y==204)then
+v=0
+elseif x and y==404 then
+u.Connected=false
+break
+else
+v+=1
+if v>=p then
+u.Connected=false
+break
+end
+
+task.wait(math.min(0.25*2^v,4))
+end
+
+if u.RetryWebSocketAt and os.clock()>=u.RetryWebSocketAt then
+u.Connected=false
+break
+end
+
+if not w then
+task.wait(u.PollInterval)
+end
+end
+end)
+
+return u
+end
+
+function t.Register(u)
+local v,w=pcall(function()
+local v=request{
 Url="http://"..d.."/register",
 Method="POST",
 Headers={["Content-Type"]="application/json"},
 Body=c:JSONEncode(f()),
 }
-if q.StatusCode==200 and q.Body then
-local r=c:JSONDecode(q.Body)
-l.ClientId=r.clientId
+if v.StatusCode~=200 or not v.Body then
+return nil
 end
+
+local w=c:JSONDecode(v.Body)
+if type(w)~="table"or type(w.clientId)~="string"then
+return nil
+end
+
+return w.clientId
 end)
 
-
-l.PollThread=task.spawn(function()
-local q=0
-
-while l.Connected do
-local r=false local
-s=pcall(function()
-local s="http://"..d.."/poll"
-if l.ClientId then
-s=s.."?clientId="..l.ClientId
-end
-local t=request{
-Url=s,
-Method="GET"
-}
-
-
-if t.StatusCode~=204 and t.StatusCode~=200 then
-q+=1
-if q>=3 then
-l.Connected=false
+if not v or w==nil then
+return false
 end
 
-return
+u.ClientId=w
+return true
 end
 
-q=0
+function t.Respond(u,v)
+local w=c:JSONEncode(v)
 
-
-if t.Body and t.Body~=""then
-local u=c:JSONDecode(t.Body)
-local v={}
-if typeof(u)=="table"and u.type==nil and#u>0 then
-v=u
-elseif typeof(u)=="table"and u.type~=nil then
-v={u}
-end
-
-for w,x in ipairs(v)do
-r=true
-task.spawn(function()
-local y=l:HandleMessage(x)
-if y==nil then return end
-
-
-request{
+for x=1,3 do
+local y,z=pcall(request,{
 Url="http://"..d.."/respond",
 Method="POST",
-Headers={
-["Content-Type"]="application/json"
-},
-Body=c:JSONEncode(y)
-}
-end)
-end
-end
-end)
-
-if not s then
-q+=1
-if q>=3 then
-l.Connected=false
-end
+Headers={["Content-Type"]="application/json"},
+Body=w,
+})
+if y and type(z)=="table"and z.StatusCode==200 then
+return true
 end
 
-if not r then
-task.wait(l.PollInterval)
-end
-end
-end)
-
-return l
+task.wait(0.25*x)
 end
 
-function k.WaitForDisconnect(l)
-while l.Connected do
+return false
+end
+
+function t.WaitForDisconnect(u)
+while u.Connected do
 task.wait(0.1)
 end
 end
 end
 
 
+local function CanUseWebSocket()
+return e and os.clock()>=q.httpOnlyUntil
+end
+
+local function RecordWebSocketFailure()
+q.webSocketFailures+=1
+
+if q.webSocketFailures>=n then
+q.webSocketFailures=0
+q.httpOnlyUntil=os.clock()+o
+end
+end
+
+local function RecordBridgeEnded(u)
+if u.Transport~="ws"then
+return
+end
+
+if os.clock()-u.ConnectedAt<m then
+RecordWebSocketFailure()
+else
+q.webSocketFailures=0
+end
+end
+
 local function CreateBridge()
+if CanUseWebSocket()then
+local u,v=pcall(s.new)
+if u then
+return v
+end
+
+RecordWebSocketFailure()
+end
+
+local u=t.new()
 if e then
-local l,m=pcall(function()
-return j.new()
-end)
-
-if l then
-return m
-end
+u.RetryWebSocketAt=math.max(q.httpOnlyUntil,os.clock()+60)
 end
 
-return k.new()
+return u
 end
 
 return{
 CreateBridge=CreateBridge,
+RecordBridgeEnded=RecordBridgeEnded,
 }
 end end function a.a():typeof(__modImpl())local b=a.cache.a if not b then b={c=__modImpl()}a.cache.a=b end return b.c end end do local function __modImpl()
 
@@ -1119,13 +1268,14 @@ local n=2
 local o=3
 local p=8
 local q=65
-local r={
+local r=1024
+local s={
 providerId=nil,
 expiresAt=0,
 refreshToken=nil,
 blockedBuiltinUntil=0,
 }
-local s={
+local t={
 startedAt=nil,
 lastAt=nil,
 samples=0,
@@ -1133,83 +1283,99 @@ lastReportAt=0,
 revision=0,
 }
 
-local function RunWithTimeout(t,u)
-local v=false
+local function RunWithTimeout(u,v)
 local w=false
-local x
+local x=false
+local y
 
-local y=task.spawn(function()
-w,x=pcall(u)
-v=true
+local z=task.spawn(function()
+x,y=pcall(v)
+w=true
 end)
 
-local z=os.clock()+t
-while not v and os.clock()<z do
+local A=os.clock()+u
+while not w and os.clock()<A do
 task.wait(0.05)
 end
 
-if not v then
-pcall(task.cancel,y)
-return false,"Timed out after "..tostring(t).."s."
-end
-
 if not w then
-return false,x
+pcall(task.cancel,z)
+return false,"Timed out after "..tostring(u).."s."
 end
 
-return true,x
+if not x then
+return false,y
 end
 
-local function IsUnusableDecompiledSource(t)
-if type(t)~="string"then return true end
-local u=string.gsub(t,"^%s+","")
-u=string.gsub(u,"%s+$","")
-if u==""then return true end
-local v=string.lower(u)
-if string.find(v,"failed to decompile",1,true)then return true end
-if string.find(v,"decompiler server not active",1,true)then return true end
-if string.find(v,"decompiler is not active",1,true)then return true end
-return false
+return true,y
 end
 
-local function RememberScriptSourceForHash(t,u)
-if type(t)~="string"or t==""then return false end
-if IsUnusableDecompiledSource(u)then return false end
-
-c.sourceCacheByHash[t]=u
-c.sourceCacheCheckedByHash[t]=true
+local function IsUnusableDecompiledSource(u)
+if type(u)~="string"then
 return true
 end
 
-local function ReadScriptHash(t)
+local v=string.find(u,"%S")
+if not v then
+return true
+end
+
+local w=v+r-1
+local x=string.lower(string.sub(u,v,w))
+
+if string.find(x,"failed to decompile",1,true)then
+return true
+end
+
+if string.find(x,"decompiler server not active",1,true)then
+return true
+end
+
+if string.find(x,"decompiler is not active",1,true)then
+return true
+end
+
+return false
+end
+
+local function RememberScriptSourceForHash(u,v)
+if type(u)~="string"or u==""then return false end
+if IsUnusableDecompiledSource(v)then return false end
+
+c.sourceCacheByHash[u]=v
+c.sourceCacheCheckedByHash[u]=true
+return true
+end
+
+local function ReadScriptHash(u)
 if type(i)~="function"then return nil end
 
-local u,v=RunWithTimeout(n,function()
-return i(t)
+local v,w=RunWithTimeout(n,function()
+return i(u)
 end)
 
-if not u or type(v)~="string"or v==""then
+if not v or type(w)~="string"or w==""then
 return nil
 end
 
-return v
+return w
 end
 
-local function GetScriptHashForInstance(t)
-local u=t:GetDebugId()
-if c.scriptHashByDebugId[u]~=nil then
-return c.scriptHashByDebugId[u]or nil
+local function GetScriptHashForInstance(u)
+local v=u:GetDebugId()
+if c.scriptHashByDebugId[v]~=nil then
+return c.scriptHashByDebugId[v]or nil
 end
 
-local v=ReadScriptHash(t)
-c.scriptHashByDebugId[u]=v or false
-return v
+local w=ReadScriptHash(u)
+c.scriptHashByDebugId[v]=w or false
+return w
 end
 
-local function FetchCachedScriptSourceBatch(t,u)
-if#u==0 then return true end
+local function FetchCachedScriptSourceBatch(u,v)
+if#v==0 then return true end
 
-local v,w=pcall(request,{
+local w,x=pcall(request,{
 Url="http://"..e.."/script-source-cache",
 Method="POST",
 Headers={
@@ -1217,59 +1383,59 @@ Headers={
 "application/json",
 },
 Body=d:JSONEncode{
-clientId=t,
-hashes=u,
+clientId=u,
+hashes=v,
 },
 })
 
-if not v or type(w)~="table"or w.StatusCode~=200 or type(w.Body)~="string"then
+if not w or type(x)~="table"or x.StatusCode~=200 or type(x.Body)~="string"then
 return false
 end
 
-local x,y=pcall(function()
-return d:JSONDecode(w.Body)
+local y,z=pcall(function()
+return d:JSONDecode(x.Body)
 end)
-if not x or type(y)~="table"or type(y.sources)~="table"then
+if not y or type(z)~="table"or type(z.sources)~="table"then
 return false
 end
 
-for z,A in ipairs(y.sources)do
-if type(A)=="table"then
-RememberScriptSourceForHash(A.scriptHash,A.source)
+for A,B in ipairs(z.sources)do
+if type(B)=="table"then
+RememberScriptSourceForHash(B.scriptHash,B.source)
 end
 end
 
 return true
 end
 
-local function FetchCachedScriptSources(t,u)
+local function FetchCachedScriptSources(u,v)
 if type(request)~="function"then return end
-if type(t)~="string"or t==""then return end
-if type(u)~="table"then return end
+if type(u)~="string"or u==""then return end
+if type(v)~="table"then return end
 
-local v={}
 local w={}
+local x={}
 local function flush()
-local x=FetchCachedScriptSourceBatch(t,v)
-if x then
-for y,z in v do
-c.sourceCacheCheckedByHash[z]=true
+local y=FetchCachedScriptSourceBatch(u,w)
+if y then
+for z,A in w do
+c.sourceCacheCheckedByHash[A]=true
 end
 end
-table.clear(v)
+table.clear(w)
 end
 
-for x,y in ipairs(u)do
+for y,z in ipairs(v)do
 if(
-type(y)=="string"and
-y~=""and
-not c.sourceCacheByHash[y]and
-not c.sourceCacheCheckedByHash[y]and
-not w[y]
+type(z)=="string"and
+z~=""and
+not c.sourceCacheByHash[z]and
+not c.sourceCacheCheckedByHash[z]and
+not x[z]
 )then
-w[y]=true
-table.insert(v,y)
-if#v>=m then
+x[z]=true
+table.insert(w,z)
+if#w>=m then
 flush()
 end
 end
@@ -1278,115 +1444,115 @@ end
 flush()
 end
 
-local function ReadScriptBytecode(t)
-local u,v=RunWithTimeout(o,function()
-return getscriptbytecode(t)
+local function ReadScriptBytecode(u)
+local v,w=RunWithTimeout(o,function()
+return getscriptbytecode(u)
 end)
-if not u or v==nil then
-return false,v or"Failed to read script bytecode."
+if not v or w==nil then
+return false,w or"Failed to read script bytecode."
 end
-return true,v
+return true,w
 end
 
-local function TryBuiltInDecompile(t)
+local function TryBuiltInDecompile(u)
 if type(h)~="function"then
 return nil,0,"Executor built-in decompile is unavailable.",false
 end
 
-local u=os.clock()
-local v,w=RunWithTimeout(p,function()
-return h(t)
+local v=os.clock()
+local w,x=RunWithTimeout(p,function()
+return h(u)
 end)
-local x=math.floor((os.clock()-u)*1000)
-if not v then
-local y=tostring(w or"Built-in decompile failed.")
-return nil,x,y,string.find(y,"Timed out",1,true)~=nil
+local y=math.floor((os.clock()-v)*1000)
+if not w then
+local z=tostring(x or"Built-in decompile failed.")
+return nil,y,z,string.find(z,"Timed out",1,true)~=nil
 end
-if type(w)~="string"or w==""or IsUnusableDecompiledSource(w)then
-return nil,x,"Built-in decompile returned no source.",false
-end
-
-return f(w),x
+if type(x)~="string"or x==""or IsUnusableDecompiledSource(x)then
+return nil,y,"Built-in decompile returned no source.",false
 end
 
-local function IsActiveMappingContext(t,u)
+return f(x),y
+end
+
+local function IsActiveMappingContext(u,v)
 return(
-t==c.generation and
-u~=nil and
-u==c.clientId
+u==c.generation and
+v~=nil and
+v==c.clientId
 )
 end
 
-local function RefreshDecompilerPlan(t,u,v)
-u=u or c.generation
-v=v or c.clientId
-if not IsActiveMappingContext(u,v)then return nil end
-local w=os.clock()
-if not t and r.expiresAt>w then
-return r.providerId
+local function RefreshDecompilerPlan(u,v,w)
+v=v or c.generation
+w=w or c.clientId
+if not IsActiveMappingContext(v,w)then return nil end
+local x=os.clock()
+if not u and s.expiresAt>x then
+return s.providerId
 end
-if r.refreshToken then
-local x=w+2
-repeat task.wait()until not r.refreshToken or os.clock()>=x
-return r.providerId
+if s.refreshToken then
+local y=x+2
+repeat task.wait()until not s.refreshToken or os.clock()>=y
+return s.providerId
 end
 if type(request)~="function"then return nil end
 
-local x={}
-r.refreshToken=x
+local y={}
+s.refreshToken=y
 
-local y,z=RunWithTimeout(5,function()
+local z,A=RunWithTimeout(5,function()
 return request{
-Url="http://"..e.."/decompile-plan?clientId="..d:UrlEncode(v),
+Url="http://"..e.."/decompile-plan?clientId="..d:UrlEncode(w),
 Method="GET",
 Headers={Accept=
 "application/json",
 },
 }
 end)
-if r.refreshToken~=x then return nil end
-r.refreshToken=nil
-if not IsActiveMappingContext(u,v)then return nil end
-if not y or type(z)~="table"or z.StatusCode~=200 or type(z.Body)~="string"then
-r.providerId=nil
-r.expiresAt=w+0.25
+if s.refreshToken~=y then return nil end
+s.refreshToken=nil
+if not IsActiveMappingContext(v,w)then return nil end
+if not z or type(A)~="table"or A.StatusCode~=200 or type(A.Body)~="string"then
+s.providerId=nil
+s.expiresAt=x+0.25
 return nil
 end
 
-local A,B=pcall(function()
-return d:JSONDecode(z.Body)
+local B,C=pcall(function()
+return d:JSONDecode(A.Body)
 end)
-if not A or type(B)~="table"then
-r.providerId=nil
-r.expiresAt=w+0.25
+if not B or type(C)~="table"then
+s.providerId=nil
+s.expiresAt=x+0.25
 return nil
 end
 
-r.providerId=if type(B.providerId)=="string"then B.providerId else nil
-local C=math.max(0.25,math.min((tonumber(B.ttlMs)or 1000)/1000,5))
-r.expiresAt=os.clock()+C
-return r.providerId
+s.providerId=if type(C.providerId)=="string"then C.providerId else nil
+local D=math.max(0.25,math.min((tonumber(C.ttlMs)or 1000)/1000,5))
+s.expiresAt=os.clock()+D
+return s.providerId
 end
 
-local function ShouldUseDirectBuiltIn(t,u,v)
-if t~="builtin"then return false end
-if r.blockedBuiltinUntil>os.clock()then return false end
-return type(h)=="function"and RefreshDecompilerPlan(false,u,v)=="builtin"
+local function ShouldUseDirectBuiltIn(u,v,w)
+if u~="builtin"then return false end
+if s.blockedBuiltinUntil>os.clock()then return false end
+return type(h)=="function"and RefreshDecompilerPlan(false,v,w)=="builtin"
 end
 
-local function PostBuiltInObservation(t,u,v)
-if not IsActiveMappingContext(u,v)then return end
-local w=c.session
-if not w then return end
-s.revision+=1
-t.clientId=v
-t.providerId="builtin"
-t.observationSessionId=w.id
-t.observationSessionStartedAt=w.startedAt
-t.observationRevision=s.revision
-t.beginObservationSession=true
+local function PostBuiltInObservation(u,v,w)
+if not IsActiveMappingContext(v,w)then return end
+local x=c.session
+if not x then return end
+t.revision+=1
+u.clientId=w
+u.providerId="builtin"
+u.observationSessionId=x.id
+u.observationSessionStartedAt=x.startedAt
+u.observationRevision=t.revision
+u.beginObservationSession=true
 task.defer(function()
-if not IsActiveMappingContext(u,v)then return end
+if not IsActiveMappingContext(v,w)then return end
 pcall(request,{
 Url="http://"..e.."/decompiler-observations",
 Method="POST",
@@ -1394,74 +1560,74 @@ Headers={
 ["Content-Type"]="application/json",Accept=
 "application/json",
 },
-Body=d:JSONEncode(t),
+Body=d:JSONEncode(u),
 })
 end)
 end
 
-local function ReportBuiltInDecompileSuccess(t,u,v)
-if not IsActiveMappingContext(u,v)then return end
-local w=os.clock()
-if s.lastAt==nil or w-s.lastAt>2 then
-s.startedAt=w
-s.samples=0
+local function ReportBuiltInDecompileSuccess(u,v,w)
+if not IsActiveMappingContext(v,w)then return end
+local x=os.clock()
+if t.lastAt==nil or x-t.lastAt>2 then
+t.startedAt=x
+t.samples=0
 end
 
-s.lastAt=w
-s.startedAt=s.startedAt or w
-s.samples+=1
-if w-s.startedAt<0.25 then return end
-if w-s.lastReportAt<0.5 then return end
-s.lastReportAt=w
+t.lastAt=x
+t.startedAt=t.startedAt or x
+t.samples+=1
+if x-t.startedAt<0.25 then return end
+if x-t.lastReportAt<0.5 then return end
+t.lastReportAt=x
 
-local x=math.max(0.001,w-s.startedAt)
-PostBuiltInObservation({
-latencyMs=t,
-successCount=s.samples,
-throughputPerSecond=s.samples/x,
-throughputWindowMs=x*1000,
-throughputSamples=s.samples,
-},u,v)
-end
-
-local function ReportBuiltInDecompileFailure(t,u,v,w,x)
-if not IsActiveMappingContext(w,x)then return end
-r.providerId=nil
-r.expiresAt=0
-r.blockedBuiltinUntil=os.clock()+5
-if v==true then l:Reduce()end
+local y=math.max(0.001,x-t.startedAt)
 PostBuiltInObservation({
 latencyMs=u,
-errorMessage=tostring(t or"Built-in decompile failed."),
-timedOut=v==true,
-},w,x)
+successCount=t.samples,
+throughputPerSecond=t.samples/y,
+throughputWindowMs=y*1000,
+throughputSamples=t.samples,
+},v,w)
 end
 
-local function RequestServerDecompile(t,u,v,w)
+local function ReportBuiltInDecompileFailure(u,v,w,x,y)
+if not IsActiveMappingContext(x,y)then return end
+s.providerId=nil
+s.expiresAt=0
+s.blockedBuiltinUntil=os.clock()+5
+if w==true then l:Reduce()end
+PostBuiltInObservation({
+latencyMs=v,
+errorMessage=tostring(u or"Built-in decompile failed."),
+timedOut=w==true,
+},x,y)
+end
+
+local function RequestServerDecompile(u,v,w,x)
 if type(request)~="function"then
 return nil,"request function is unavailable"
 end
 
-u=if type(u)=="table"then u else{}
-local x={
-clientId=w,
-bytecode=g(t),
+v=if type(v)=="table"then v else{}
+local y={
+clientId=x,
+bytecode=g(u),
 builtinAvailable=type(h)=="function",
 }
-if type(u.builtinSource)=="string"then
-x.builtinSource=u.builtinSource
+if type(v.builtinSource)=="string"then
+y.builtinSource=v.builtinSource
 end
-if type(u.builtinLatencyMs)=="number"then
-x.builtinLatencyMs=u.builtinLatencyMs
+if type(v.builtinLatencyMs)=="number"then
+y.builtinLatencyMs=v.builtinLatencyMs
 end
-if type(u.requestedProvider)=="string"then
-x.requestedProvider=u.requestedProvider
+if type(v.requestedProvider)=="string"then
+y.requestedProvider=v.requestedProvider
 end
-if type(u.disabledProviders)=="table"then
-x.disabledProviders=u.disabledProviders
+if type(v.disabledProviders)=="table"then
+y.disabledProviders=v.disabledProviders
 end
 
-local y,z=RunWithTimeout(q,function()
+local z,A=RunWithTimeout(q,function()
 return request{
 Url="http://"..e.."/decompile",
 Method="POST",
@@ -1469,229 +1635,229 @@ Headers={
 ["Content-Type"]="application/json",Accept=
 "application/json",
 },
-Body=d:JSONEncode(x),
+Body=d:JSONEncode(y),
 }
 end)
-if not y then
-return nil,tostring(z)
+if not z then
+return nil,tostring(A)
 end
 
-if type(z)~="table"or type(z.Body)~="string"then
+if type(A)~="table"or type(A.Body)~="string"then
 return nil,"Decompile server returned no response body."
 end
 
-local A,B=pcall(function()
-return d:JSONDecode(z.Body)
+local B,C=pcall(function()
+return d:JSONDecode(A.Body)
 end)
-if not A or type(B)~="table"then
+if not B or type(C)~="table"then
 return nil,"Decompile server returned invalid JSON."
 end
 
-local C
-if type(B.attemptedProviders)=="table"and type(B.attemptedProviders[1])=="string"then
-C=B.attemptedProviders[1]
+local D
+if type(C.attemptedProviders)=="table"and type(C.attemptedProviders[1])=="string"then
+D=C.attemptedProviders[1]
 end
 
-if B.ok==true and type(B.source)=="string"and B.source~=""then
-if IsUnusableDecompiledSource(B.source)then
-return nil,B.source,false,C
+if C.ok==true and type(C.source)=="string"and C.source~=""then
+if IsUnusableDecompiledSource(C.source)then
+return nil,C.source,false,D
 end
-return f(B.source),nil,false,C
+return f(C.source),nil,false,D
 end
-if B.needsBuiltin==true and B.providerId=="builtin"then
-return nil,nil,true,C
-end
-
-if type(B.error)=="string"and B.error~=""then
-return nil,B.error,false,C
-end
-if type(B.attempts)=="table"then
-return nil,table.concat(B.attempts,"\n\n"),false,C
+if C.needsBuiltin==true and C.providerId=="builtin"then
+return nil,nil,true,D
 end
 
-return nil,"Decompile server failed without a detailed error.",false,C
+if type(C.error)=="string"and C.error~=""then
+return nil,C.error,false,D
+end
+if type(C.attempts)=="table"then
+return nil,table.concat(C.attempts,"\n\n"),false,D
 end
 
-local function PrepareScriptForMapping(t,u,v,w,x)
-v=v or c.generation
-w=w or c.clientId
-local y=t:GetDebugId()
-local z=GetScriptHashForInstance(t)
-if u and z then
-FetchCachedScriptSources(w,{z})
+return nil,"Decompile server failed without a detailed error.",false,D
 end
 
-local A=z and c.sourceCacheByHash[z]or nil
-if A then
-if IsUnusableDecompiledSource(A)then
-c.sourceCacheByHash[z]=nil
-else
-return{
-debugId=y,
-scriptHash=z,
-source=A,
-}
-end
+local function PrepareScriptForMapping(u,v,w,x,y)
+w=w or c.generation
+x=x or c.clientId
+local z=u:GetDebugId()
+local A=GetScriptHashForInstance(u)
+if v and A then
+FetchCachedScriptSources(x,{A})
 end
 
-local B=RefreshDecompilerPlan(false,v,w)
-local C=x or B
-local D=x=="builtin"
-if D or ShouldUseDirectBuiltIn(C,v,w)then
-return{
-debugId=y,
-scriptHash=z,
-retryProviderId=x,
-useDirectBuiltin=true,
-forceDirectBuiltinRetry=D,
-}
-end
-
-local E,F=ReadScriptBytecode(t)
-if not E then
-return nil,F
-end
-
-return{
-debugId=y,
-scriptHash=z,
-bytecode=F,
-retryProviderId=x,
-}
-end
-
-local function BuildServerOptions(t,u)
-local v={}
-if type(t.retryProviderId)=="string"then
-v.requestedProvider=t.retryProviderId
-end
-if type(u)=="table"then
-for w,x in u do
-v[w]=x
-end
-end
-return if next(v)==nil then nil else v
-end
-
-local function TakeRetryServerOptions(t,u)
-local v=BuildServerOptions(t,u)
-t.retryProviderId=nil
-return v
-end
-
-local function DecompileScriptSource(t,u,v,w)
-v=v or c.generation
-w=w or c.clientId
-local x
-if not u then
-u,x=PrepareScriptForMapping(t,true,v,w)
-end
-if not u then
-return nil,x or"Failed to prepare script for decompile.",nil,nil
-end
-
-if type(u.source)=="string"and u.source~=""then
-return u.source,nil,u.scriptHash,u
-end
-if u.useDirectBuiltin==true then
-local y=u.forceDirectBuiltinRetry==true or
-j.CanAttemptBuiltIn(
-u,
-r.blockedBuiltinUntil,
-os.clock()
-)
-if y then
-u.retryProviderId=nil
-u.forceDirectBuiltinRetry=nil
-u.initialProviderId=u.initialProviderId or"builtin"
-j.MarkBuiltInAttempted(u)
-local z,A,B,C=TryBuiltInDecompile(t)
-if z then
-ReportBuiltInDecompileSuccess(A,v,w)
-if u.scriptHash then
-RememberScriptSourceForHash(u.scriptHash,z)
-end
-return z,nil,u.scriptHash,u
-end
-
-j.DisableBuiltIn(u)
-ReportBuiltInDecompileFailure(B,A,C,v,w)
-end
-local z,A=k.MaterializeServerFallback(u,function()
-return ReadScriptBytecode(t)
-end)
-if not z then
-return nil,A,u.scriptHash,u
-end
-end
-
-if type(u.bytecode)~="string"then
-return nil,"Prepared script is missing bytecode.",u.scriptHash,u
-end
-
-local y=TakeRetryServerOptions(
-u,
-if u.builtinDisabled==true then{disabledProviders={"builtin"}}else nil
-)
-local z,A,B,C=RequestServerDecompile(
-u.bytecode,
-y,
-v,
-w
-)
-if not u.initialProviderId and type(C)=="string"then
-u.initialProviderId=C
-end
+local B=A and c.sourceCacheByHash[A]or nil
 if B then
-local D=j.CanAttemptBuiltIn(
-u,
-r.blockedBuiltinUntil,
-os.clock()
-)
-if D then
-j.MarkBuiltInAttempted(u)
-local E,F,G,H=TryBuiltInDecompile(t)
-if E then
-ReportBuiltInDecompileSuccess(F,v,w)
-z,A=RequestServerDecompile(u.bytecode,BuildServerOptions(u,{
-requestedProvider="builtin",
-builtinSource=E,
-builtinLatencyMs=F,
-}),v,w)
+if IsUnusableDecompiledSource(B)then
+c.sourceCacheByHash[A]=nil
 else
-j.DisableBuiltIn(u)
-ReportBuiltInDecompileFailure(G,F,H,v,w)
-z,A=RequestServerDecompile(u.bytecode,BuildServerOptions(u,{
-disabledProviders={"builtin"},
-}),v,w)
+return{
+debugId=z,
+scriptHash=A,
+source=B,
+}
 end
-else
-j.DisableBuiltIn(u)
-z,A=RequestServerDecompile(u.bytecode,BuildServerOptions(u,{
-disabledProviders={"builtin"},
-}),v,w)
-end
-end
-if not z then
-return nil,A,u.scriptHash,u
 end
 
-if u.scriptHash then
-RememberScriptSourceForHash(u.scriptHash,z)
+local C=RefreshDecompilerPlan(false,w,x)
+local D=y or C
+local E=y=="builtin"
+if E or ShouldUseDirectBuiltIn(D,w,x)then
+return{
+debugId=z,
+scriptHash=A,
+retryProviderId=y,
+useDirectBuiltin=true,
+forceDirectBuiltinRetry=E,
+}
 end
-return z,nil,u.scriptHash,u
+
+local F,G=ReadScriptBytecode(u)
+if not F then
+return nil,G
+end
+
+return{
+debugId=z,
+scriptHash=A,
+bytecode=G,
+retryProviderId=y,
+}
+end
+
+local function BuildServerOptions(u,v)
+local w={}
+if type(u.retryProviderId)=="string"then
+w.requestedProvider=u.retryProviderId
+end
+if type(v)=="table"then
+for x,y in v do
+w[x]=y
+end
+end
+return if next(w)==nil then nil else w
+end
+
+local function TakeRetryServerOptions(u,v)
+local w=BuildServerOptions(u,v)
+u.retryProviderId=nil
+return w
+end
+
+local function DecompileScriptSource(u,v,w,x)
+w=w or c.generation
+x=x or c.clientId
+local y
+if not v then
+v,y=PrepareScriptForMapping(u,true,w,x)
+end
+if not v then
+return nil,y or"Failed to prepare script for decompile.",nil,nil
+end
+
+if type(v.source)=="string"and v.source~=""then
+return v.source,nil,v.scriptHash,v
+end
+if v.useDirectBuiltin==true then
+local z=v.forceDirectBuiltinRetry==true or
+j.CanAttemptBuiltIn(
+v,
+s.blockedBuiltinUntil,
+os.clock()
+)
+if z then
+v.retryProviderId=nil
+v.forceDirectBuiltinRetry=nil
+v.initialProviderId=v.initialProviderId or"builtin"
+j.MarkBuiltInAttempted(v)
+local A,B,C,D=TryBuiltInDecompile(u)
+if A then
+ReportBuiltInDecompileSuccess(B,w,x)
+if v.scriptHash then
+RememberScriptSourceForHash(v.scriptHash,A)
+end
+return A,nil,v.scriptHash,v
+end
+
+j.DisableBuiltIn(v)
+ReportBuiltInDecompileFailure(C,B,D,w,x)
+end
+local A,B=k.MaterializeServerFallback(v,function()
+return ReadScriptBytecode(u)
+end)
+if not A then
+return nil,B,v.scriptHash,v
+end
+end
+
+if type(v.bytecode)~="string"then
+return nil,"Prepared script is missing bytecode.",v.scriptHash,v
+end
+
+local z=TakeRetryServerOptions(
+v,
+if v.builtinDisabled==true then{disabledProviders={"builtin"}}else nil
+)
+local A,B,C,D=RequestServerDecompile(
+v.bytecode,
+z,
+w,
+x
+)
+if not v.initialProviderId and type(D)=="string"then
+v.initialProviderId=D
+end
+if C then
+local E=j.CanAttemptBuiltIn(
+v,
+s.blockedBuiltinUntil,
+os.clock()
+)
+if E then
+j.MarkBuiltInAttempted(v)
+local F,G,H,I=TryBuiltInDecompile(u)
+if F then
+ReportBuiltInDecompileSuccess(G,w,x)
+A,B=RequestServerDecompile(v.bytecode,BuildServerOptions(v,{
+requestedProvider="builtin",
+builtinSource=F,
+builtinLatencyMs=G,
+}),w,x)
+else
+j.DisableBuiltIn(v)
+ReportBuiltInDecompileFailure(H,G,I,w,x)
+A,B=RequestServerDecompile(v.bytecode,BuildServerOptions(v,{
+disabledProviders={"builtin"},
+}),w,x)
+end
+else
+j.DisableBuiltIn(v)
+A,B=RequestServerDecompile(v.bytecode,BuildServerOptions(v,{
+disabledProviders={"builtin"},
+}),w,x)
+end
+end
+if not A then
+return nil,B,v.scriptHash,v
+end
+
+if v.scriptHash then
+RememberScriptSourceForHash(v.scriptHash,A)
+end
+return A,nil,v.scriptHash,v
 end
 
 local function ResetDecompilerClient()
-r.providerId=nil
-r.expiresAt=0
-r.refreshToken=nil
-r.blockedBuiltinUntil=0
-s.startedAt=nil
-s.lastAt=nil
-s.samples=0
-s.lastReportAt=0
-s.revision=0
+s.providerId=nil
+s.expiresAt=0
+s.refreshToken=nil
+s.blockedBuiltinUntil=0
+t.startedAt=nil
+t.lastAt=nil
+t.samples=0
+t.lastReportAt=0
+t.revision=0
 end
 
 return{
@@ -2922,38 +3088,8 @@ local h=b.ResetScriptMappingState
 local i=b.StartScriptMapping
 local j=b.StartFailedScriptResync
 local k=b.ResumeDeferredScriptMappings
-
-while true do
-local l,m=pcall(c)
-
-if not l then
-task.wait(3)
-continue
-end
-
-local n=d(m)
-if n then
-e.bridge=m
-f()
-
-if e.clientId~=n then
-h(n)
-end
-
-if not getgenv().DisableInitialScriptDecompMapping then
-i(n)
-j()
-k()
-g()
-else
-e.clientId=n
-e.disabled=true
-e.stateVersion+=1
-g()
-end
-end
-
-local o={a.m()
+local l=b.RecordBridgeEnded
+local m={a.m()
 ,a.n()
 ,a.o()
 ,a.p()
@@ -2961,13 +3097,49 @@ local o={a.m()
 ,a.r()
 ,
 }
-for p,q in o do
-q(b,m)
+local n=1
+
+
+while true do
+local o,p=pcall(c)
+
+if not o then
+task.wait(n)
+n=math.min(n*2,10)
+continue
+end
+n=1
+
+for q,r in m do
+r(b,p)
 end
 
-m:WaitForDisconnect()
+local q=d(p)
+if q then
+e.bridge=p
+f()
 
-if e.bridge==m then
+if e.clientId~=q then
+h(q)
+end
+
+if not getgenv().DisableInitialScriptDecompMapping then
+i(q)
+j()
+k()
+g()
+else
+e.clientId=q
+e.disabled=true
+e.stateVersion+=1
+g()
+end
+end
+
+p:WaitForDisconnect()
+l(p)
+
+if e.bridge==p then
 e.bridge=nil
 end
 task.wait(1)
@@ -3264,6 +3436,7 @@ end a.s()
 
 {
 CreateBridge=w,
+RecordBridgeEnded=v.RecordBridgeEnded,
 WaitForBridgeClientId=WaitForBridgeClientId,
 ScriptMappingPipeline=C,
 StartUploadQueue=L,

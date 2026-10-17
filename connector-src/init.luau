@@ -288,6 +288,7 @@ end
 
 require("./bridge/runtime")({
     CreateBridge = CreateBridge,
+    RecordBridgeEnded = BridgeClient.RecordBridgeEnded,
     WaitForBridgeClientId = WaitForBridgeClientId,
     ScriptMappingPipeline = ScriptMappingPipeline,
     StartUploadQueue = StartUploadQueue,
