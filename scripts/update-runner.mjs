@@ -31,12 +31,18 @@ export async function runUpdateCommand(
   args,
   { env = process.env, cwd, outputLimit = 8_000 } = {}
 ) {
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") || "PATH";
+  const childEnv = {
+    ...env,
+    CI: "true",
+    [pathKey]: [path.dirname(process.execPath), env[pathKey]].filter(Boolean).join(path.delimiter),
+  };
   let output = "";
   await new Promise((resolve, reject) => {
-    const launch = resolvePackageCommand(command, args, { env });
+    const launch = resolvePackageCommand(command, args, { env: childEnv });
     const child = spawn(launch.command, launch.args, {
       cwd,
-      env: { ...env, CI: "true" },
+      env: childEnv,
       shell: launch.shell,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,

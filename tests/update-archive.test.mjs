@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { runStagedUpdate } from "../scripts/update-runner.mjs";
+import { runStagedUpdate, runUpdateCommand } from "../scripts/update-runner.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -114,6 +114,10 @@ test("archive updates keep the harness bootstrap stable and activate a versioned
   const address = archiveServer.address();
   const archiveUrl = `http://127.0.0.1:${address.port}/latest.tar.gz`;
   const statuses = [];
+  const serviceEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PATH"));
+  serviceEnv.PATH = process.platform === "win32"
+    ? path.join(process.env.SystemRoot || "C:\\Windows", "System32")
+    : "/usr/bin:/bin";
 
   result = await runStagedUpdate({
     serverRoot: root,
@@ -121,6 +125,7 @@ test("archive updates keep the harness bootstrap stable and activate a versioned
     corePort,
     archiveUrl,
     packageRunner: "npm",
+    runCommand: (command, args, options) => runUpdateCommand(command, args, { ...options, env: serviceEnv }),
     status: async (message, extra) => statuses.push({ message, ...extra }),
   });
 
