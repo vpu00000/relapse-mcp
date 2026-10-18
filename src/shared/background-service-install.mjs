@@ -403,7 +403,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=${systemdQuote(nodePath)} ${systemdQuote(coreEntry)}
-WorkingDirectory=${systemdQuote(serverRoot)}
+WorkingDirectory=${systemdPath(serverRoot)}
 Environment=${systemdQuote(`ROBLOX_MCP_SERVER_ROOT=${serverRoot}`)}
 Restart=on-failure
 RestartSec=2
@@ -523,6 +523,10 @@ function xmlEscape(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
+}
+
+function systemdPath(value) {
+  return String(value).replaceAll("%", "%%");
 }
 
 function systemdQuote(value) {
