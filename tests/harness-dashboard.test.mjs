@@ -582,6 +582,12 @@ test("background service installer starts each native manager immediately", asyn
     ), `${platform} did not start its registered service`);
     if (platform === "win32") windowsCalls = calls;
   }
+  const systemdUnitFile = await fs.readFile(
+    path.join(temporaryRoot, "linux", ".config", "systemd", "user", "roblox-mcp.service"),
+    "utf8"
+  );
+  const workingDirectory = systemdUnitFile.match(/^WorkingDirectory=(.*)$/m)?.[1];
+  assert.equal(workingDirectory, path.join(temporaryRoot, "server"));
   const windowsStartupFile = path.join(
     temporaryRoot,
     "win32",
