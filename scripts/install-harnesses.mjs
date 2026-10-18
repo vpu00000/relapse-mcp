@@ -17,7 +17,7 @@ import {
 } from "../src/shared/autoexec.mjs";
 import { getLocalLanIp, getTailscaleIp } from "../src/shared/local-addresses.mjs";
 import { mcpServersRecipeJson } from "../src/shared/mcp-recipe.mjs";
-import { resolvePackageCommand } from "./package-command.mjs";
+import { installBuildDependencies, resolvePackageCommand } from "./package-command.mjs";
 import { MAIN_REPO_URL } from "./repository-source.mjs";
 
 const DEFAULT_SERVER_NAME = "roblox-mcp";
@@ -835,10 +835,10 @@ async function installServer(serverRoot, results, options = {}) {
       : commandExists("pnpm")
         ? "pnpm"
         : "npm";
-  await run(
+  await installBuildDependencies(
     runner,
-    ["install", "--ignore-scripts"],
-    { cwd: serverRoot, label: `Installing dependencies with ${runner}` }
+    { cwd: serverRoot, label: `Installing dependencies with ${runner}`, dryRun: DRY_RUN },
+    run
   );
   await run(runner, ["run", "build"], { cwd: serverRoot, label: "Building server" });
   const serverEntry = path.join(serverRoot, "dist", "index.js");
@@ -1853,7 +1853,7 @@ async function run(command, args, options = {}) {
       const launch = resolvePackageCommand(commandToRun, args);
       child = spawn(launch.command, launch.args, {
         cwd: options.cwd || process.cwd(),
-        env: { ...process.env, CI: "true" },
+        env: { ...(launch.env || process.env), CI: "true" },
         stdio: ["ignore", "pipe", "pipe"],
         shell: launch.shell,
         windowsHide: true,
@@ -1902,7 +1902,7 @@ async function runForeground(command, args, options = {}) {
       const launch = resolvePackageCommand(commandToRun, args);
       child = spawn(launch.command, launch.args, {
         cwd: options.cwd || process.cwd(),
-        env: process.env,
+        env: launch.env || process.env,
         stdio: "inherit",
         shell: launch.shell,
         windowsHide: false,

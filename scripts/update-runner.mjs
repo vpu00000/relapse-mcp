@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolvePackageCommand } from "./package-command.mjs";
+import { installBuildDependencies, resolvePackageCommand } from "./package-command.mjs";
 
 import {
   activateCandidateBuild,
@@ -42,7 +42,7 @@ export async function runUpdateCommand(
     const launch = resolvePackageCommand(command, args, { env: childEnv });
     const child = spawn(launch.command, launch.args, {
       cwd,
-      env: childEnv,
+      env: launch.env || childEnv,
       shell: launch.shell,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -149,9 +149,9 @@ export async function runStagedUpdate({
           ? "pnpm"
           : "npm");
     await status("Installing the staged dependencies…", { source: source.kind });
-    await runCommand(runner, ["install", "--ignore-scripts"], {
+    await installBuildDependencies(runner, {
       cwd: stagingRoot,
-    });
+    }, runCommand);
 
     const candidateDist = path.join(stagingRoot, "dist");
     const candidateNodeModules = path.join(stagingRoot, "node_modules");

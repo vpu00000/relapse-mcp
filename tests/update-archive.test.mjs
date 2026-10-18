@@ -68,6 +68,7 @@ test("archive updates keep the harness bootstrap stable and activate a versioned
       version: "2.0.0",
       type: "module",
       scripts: { build: "node build.mjs" },
+      devDependencies: { typescript: "file:./compiler" },
     }, null, 2)}\n`,
     "utf8"
   );
@@ -76,6 +77,9 @@ test("archive updates keep the harness bootstrap stable and activate a versioned
     "// archive updater validation marker\n",
     "utf8"
   );
+  await fs.mkdir(path.join(sourceRoot, "compiler", "bin"), { recursive: true });
+  await fs.writeFile(path.join(sourceRoot, "compiler", "package.json"), JSON.stringify({ name: "typescript", version: "1.0.0" }));
+  await fs.writeFile(path.join(sourceRoot, "compiler", "bin", "tsc"), "process.exit(0);\n");
   await fs.writeFile(
     path.join(sourceRoot, "build.mjs"),
     [

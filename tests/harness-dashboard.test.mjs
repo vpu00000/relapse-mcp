@@ -972,18 +972,36 @@ test("dashboard update control starts and monitors the automatic updater", async
   );
   const windowsCodeShim = String.raw`C:\Program Files\Microsoft VS Code\bin\code.cmd`;
   const windowsCodeExe = String.raw`C:\Program Files\Microsoft VS Code\Code.exe`;
+  const windowsCodeCli = String.raw`C:\Program Files\Microsoft VS Code\resources\app\out\cli.js`;
+  const codeEnv = { PATH: String.raw`C:\Windows\System32`, VSCODE_DEV: "1" };
   assert.deepEqual(
     resolvePackageCommand(windowsCodeShim, ["--add-mcp", "{}"], {
       platform: "win32",
       execPath: windowsNode,
-      fileExists: (filePath) => filePath === windowsCodeExe,
+      env: codeEnv,
+      fileExists: (filePath) => [windowsCodeExe, windowsCodeCli].includes(filePath),
     }),
     {
       command: windowsCodeExe,
-      args: ["--add-mcp", "{}"],
+      args: [windowsCodeCli, "--add-mcp", "{}"],
       shell: false,
+      env: { ...codeEnv, ELECTRON_RUN_AS_NODE: "1", VSCODE_DEV: "" },
     }
   );
+  const versionedCodeCli = String.raw`C:\Program Files\Microsoft VS Code\645f29cc31\resources\app\out\cli.js`;
+  const versionedCodeLaunch = resolvePackageCommand(windowsCodeShim, ["--version"], {
+    platform: "win32",
+    env: codeEnv,
+    fileExists: (filePath) => [windowsCodeShim, windowsCodeExe, versionedCodeCli].includes(filePath),
+    readFile: () => '"%~dp0..\\Code.exe" "%~dp0..\\645f29cc31\\resources\\app\\out\\cli.js" %*',
+  });
+  assert.equal(versionedCodeLaunch.args[0], versionedCodeCli);
+  assert.equal(versionedCodeLaunch.env.ELECTRON_RUN_AS_NODE, "1");
+  assert.equal(codeEnv.VSCODE_DEV, "1");
+  assert.throws(() => resolvePackageCommand(windowsCodeShim, ["--version"], {
+    platform: "win32",
+    fileExists: (filePath) => filePath === windowsCodeExe,
+  }), /Could not locate the VS Code CLI/);
   assert.match(packageCommand, /Could not locate \$\{cliName\}/);
   assert.doesNotMatch(runner, /shell:\s*useShell/);
   assert.match(source, /DEFAULT_UPDATE_ARCHIVE_URL/);

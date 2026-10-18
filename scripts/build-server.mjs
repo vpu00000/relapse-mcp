@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveTypeScriptCompiler } from "./package-command.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDist = path.join(root, "dist");
@@ -13,8 +14,15 @@ if (outputDir === root || !outputDir.startsWith(`${root}${path.sep}`)) {
   throw new Error(`Refusing to build outside the repository: ${outputDir}`);
 }
 
+let tscEntry;
+try {
+  tscEntry = resolveTypeScriptCompiler(root);
+} catch (error) {
+  if (error.code !== "MODULE_NOT_FOUND") throw error;
+  console.error("TypeScript is missing. Run npm install --include=dev --ignore-scripts, then retry the build.");
+  process.exit(1);
+}
 fs.rmSync(outputDir, { recursive: true, force: true });
-const tscEntry = path.join(root, "node_modules", "typescript", "bin", "tsc");
 const compile = spawnSync(
   process.execPath,
   [tscEntry, "--outDir", outputDir],

@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 const PACKAGE_COMMANDS = new Set(["npm", "pnpm"]);
@@ -12,6 +13,26 @@ const WINDOWS_NATIVE_CLI_PATHS = Object.freeze({
   claude: [["node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"]],
   code: [["..", "Code.exe"]],
 });
+
+export function resolveTypeScriptCompiler(serverRoot) {
+  return createRequire(path.join(serverRoot, "package.json")).resolve("typescript/bin/tsc");
+}
+
+export async function installBuildDependencies(runner, options, runCommand) {
+  await runCommand(runner, ["install", "--ignore-scripts", ...(runner === "npm" ? ["--include=dev"] : [])], options);
+  if (options.dryRun) return;
+  try {
+    resolveTypeScriptCompiler(options.cwd);
+    return;
+  } catch (error) {
+    if (error.code !== "MODULE_NOT_FOUND" || runner === "npm") throw error;
+  }
+  await runCommand("npm", ["install", "--ignore-scripts", "--include=dev", "--package-lock=false"], {
+    ...options,
+    label: "Repairing missing build dependencies with npm",
+  });
+  resolveTypeScriptCompiler(options.cwd);
+}
 
 export function resolvePackageCommand(command, args, options = {}) {
   const platform = options.platform || process.platform;
@@ -37,7 +58,24 @@ export function resolvePackageCommand(command, args, options = {}) {
         `Could not locate the ${commandName} executable behind ${command}. Reinstall ${commandName} and try again.`
       );
     }
-    if (executable) return { command: executable, args: [...args], shell: false };
+    if (executable) {
+      if (commandName === "code") {
+        const shim = fileExists(command)
+          ? (options.readFile || fsSync.readFileSync)(command, "utf8")
+          : "";
+        const cliRelativePath = shim.match(/"%~dp0([^"\r\n]*[\\/]cli\.js)"/i)?.[1]
+          || "..\\resources\\app\\out\\cli.js";
+        const cliPath = path.win32.resolve(shimDirectory, cliRelativePath);
+        if (!fileExists(cliPath)) throw new Error(`Could not locate the VS Code CLI behind ${command}. Reinstall VS Code and try again.`);
+        return {
+          command: executable,
+          args: [cliPath, ...args],
+          shell: false,
+          env: { ...environment, ELECTRON_RUN_AS_NODE: "1", VSCODE_DEV: "" },
+        };
+      }
+      return { command: executable, args: [...args], shell: false };
+    }
   }
 
   if (
