@@ -5,11 +5,9 @@ import path from "node:path";
 import {
   GetResponseOfIdFromClient,
   SendArbitraryDataToClient,
-  getInstanceRole,
 } from "../bridge/handlers/shared/communication.js";
 import { getActiveClientId, resolveTargetClient } from "../bridge/handlers/shared/registry.js";
 import { RobloxResponse } from "../bridge/types.js";
-import { BASE_URL, WS_PORT } from "../config.js";
 import { INVALID_CLIENT_ERROR, NO_CLIENT_ERROR } from "./errors.js";
 
 export const DEFAULT_TOOL_OUTPUT_CHAR_LIMIT = 6000;
@@ -20,94 +18,11 @@ const TOOL_OUTPUT_ARTIFACT_TTL_MS = 60 * 60 * 1000;
 const MAX_TOOL_OUTPUT_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const TOOL_OUTPUT_ARTIFACT_DIR = path.join(
   os.tmpdir(),
-  `roblox-mcp-output-${process.getuid?.() ?? "user"}`
+  `relapse-mcp-output-${process.getuid?.() ?? "user"}`
 );
 
 export function sourceWithThreadContext(code: string, threadContext: number): string {
   return `local __setidentity = setthreadidentity or setidentity\nif type(__setidentity) == "function" then __setidentity(${threadContext}) end\n${code}`;
-}
-
-/**
- * Check if the current instance is a secondary relay.
- * Secondaries can be created either via --baseurl or automatically when
- * the port is already in use (EADDRINUSE fallback).
- */
-export function isSecondaryRelay(): boolean {
-  return getInstanceRole() === "secondary";
-}
-
-/**
- * Get the base URL of the primary server.
- * If --baseurl was specified, use that. Otherwise fall back to localhost.
- */
-function getPrimaryBaseUrl(): string {
-  if (BASE_URL) return BASE_URL.replace(/\/$/, "");
-  return `http://localhost:${WS_PORT}`;
-}
-
-/**
- * Relay a tool call to the primary's /api/tool HTTP endpoint.
- * Handles both immediate results and progress-job-based async responses
- * (polls /api/tool-progress until done).
- */
-export async function relayToolToApi(
-  type: string,
-  params: Record<string, unknown>,
-  timeoutMs: number = 60000,
-  outputOptions: ToolOutputOptions = {}
-): Promise<ToolTextResponse> {
-  const primaryBase = getPrimaryBaseUrl();
-  const toolUrl = primaryBase + "/api/tool";
-  const activeClientId = getActiveClientId();
-
-  try {
-    const resp = await fetch(toolUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type,
-        ...(activeClientId ? { clientId: activeClientId } : {}),
-        ...params,
-      }),
-    });
-
-    const data = (await resp.json()) as Record<string, unknown>;
-
-    if (data.error) {
-      return toolTextResponse(data.error as string, outputOptions, true);
-    }
-
-    // Immediate result
-    if (data.result !== undefined) {
-      return toolTextResponse(String(data.result), outputOptions);
-    }
-
-    // Progress-job based (semantic search/index)
-    if (data.jobId && data.progressUrl) {
-      const progressUrl = primaryBase + (data.progressUrl as string);
-      const deadline = Date.now() + timeoutMs;
-
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 1000));
-
-        const progressResp = await fetch(progressUrl);
-        const job = (await progressResp.json()) as Record<string, unknown>;
-
-        if (job.status === "done") {
-          return toolTextResponse(String(job.result ?? "Done."), outputOptions);
-        }
-        if (job.status === "failed") {
-          return toolTextResponse(`Failed: ${(job.error as string) ?? "Unknown error"}`, outputOptions, true);
-        }
-      }
-
-      return toolTextResponse("Timed out waiting for primary to complete.", outputOptions, true);
-    }
-
-    return toolTextResponse(JSON.stringify(data), outputOptions);
-  } catch (err) {
-    return toolTextResponse(`Failed to relay to primary: ${(err as Error).message || err}`, outputOptions, true);
-  }
 }
 
 export interface ToolTextResponse {
@@ -224,7 +139,7 @@ export function toolTextResponse(
 /**
  * Build a compact one-line stamp identifying the client a result came from,
  * so the model does not blend stale results across clients (context poisoning).
- * Returns "" when it can't be resolved (e.g. secondary relay).
+ * Returns "" when there is no active session.
  */
 export function clientStampPrefix(): string {
   try {

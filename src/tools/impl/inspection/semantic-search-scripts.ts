@@ -8,7 +8,6 @@ import {
 } from "../../../semantic/index-status.js";
 import { semanticIndexCodebase, semanticSearchScripts, type SemanticSearchOutput } from "../../../semantic/vector-index.js";
 import { clientStampPrefix, toolTextResponse, type ToolTextResponse } from "../../factory.js";
-import { isSecondaryRelay, relayToolToApi } from "../../factory.js";
 import { maxOutputCharsSchema } from "../../schemas.js";
 import { fetchScriptSearchIndex } from "./script-sources.js";
 
@@ -90,21 +89,6 @@ export default function register(server: McpServer): void {
       }),
     },
     async ({ query, limit, minScore, requireFullIndex, indexOnly, maxOutputChars }): Promise<ToolTextResponse> => {
-      // Secondary mode: script sources and embeddings live on the primary.
-      if (isSecondaryRelay()) {
-        return relayToolToApi("semantic-search", {
-          query,
-          limit,
-          ...(minScore !== undefined ? { minScore } : {}),
-          requireFullIndex,
-          indexOnly,
-          maxOutputChars,
-        }, 120000, {
-          maxOutputChars,
-          truncationHint: "Rerun semantic-search-scripts with a lower limit or higher minScore.",
-        });
-      }
-
       const indexResult = fetchScriptSearchIndex({ allowIncomplete: true });
       if (!indexResult.ok) return indexResult.response;
 
@@ -115,7 +99,7 @@ export default function register(server: McpServer): void {
           content: [
             {
               type: "text",
-              text: `Semantic search is not configured: ${settingsError} Configure it from the MCP dashboard.`,
+              text: `Semantic search is not configured: ${settingsError} Set the Relapse MCP embedding environment variables.`,
             },
           ],
           isError: true,

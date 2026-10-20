@@ -1,7 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { getInstanceRole } from "../bridge/handlers/shared/communication.js";
 import {
   resolveTargetClient,
   withClientSelection,
@@ -33,7 +32,11 @@ export function registerClientTool<Shape extends z.ZodRawShape = {}>(
   server.registerTool(name, { ...config, inputSchema }, async (args) => {
     const requested = !management ? (args as { clientId?: string }).clientId : undefined;
     let clientId = requested ?? sessionSelection.clientId;
-    if (!management && getInstanceRole() !== "secondary") {
+    if (!requested && clientId && !resolveTargetClient(clientId)) {
+      sessionSelection.clientId = undefined;
+      clientId = undefined;
+    }
+    if (!management) {
       const target = resolveTargetClient(clientId);
       if (!target) return clientId ? INVALID_CLIENT_ERROR : NO_CLIENT_ERROR;
       clientId = target.clientId;

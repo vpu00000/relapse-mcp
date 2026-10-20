@@ -78,9 +78,3 @@ export async function writePersistedEmbeddings(
   }
   await writeCache();
 }
-
-export async function clearPersistedEmbeddings(): Promise<void> {
-  hasLoaded = true;
-  entries.clear();
-  await fs.rm(SEMANTIC_EMBEDDINGS_PATH, { force: true }).catch(() => undefined);
-}

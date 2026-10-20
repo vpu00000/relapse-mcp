@@ -35,12 +35,6 @@ export interface SemanticSearchResult {
   snippet: string;
 }
 
-export interface SemanticSearchProgress {
-  message: string;
-  completed: number;
-  total: number;
-}
-
 interface ScriptChunk {
   id: string;
   embeddingId: string;
@@ -164,40 +158,29 @@ function countEmbeddedChunkAliases(session: SemanticVectorSession, chunks: Scrip
   return embeddedChunks;
 }
 
-export function getSemanticIndexStats(
+function getSemanticIndexStats(
   index: ScriptSourceIndex,
   settings: SemanticSettings
 ): {
   chunkCount: number;
   embeddedChunks: number;
-  uniqueChunkCount: number;
-  embeddedUniqueChunks: number;
 } {
   const chunks = buildChunks(index.scripts);
   const key = sessionKey(index, settings);
   const session = vectorSessionsByKey.get(key);
-  const uniqueChunks = uniqueChunksByEmbedding(chunks);
-
   if (!session) {
     return {
       chunkCount: chunks.length,
       embeddedChunks: 0,
-      uniqueChunkCount: uniqueChunks.length,
-      embeddedUniqueChunks: 0,
     };
   }
 
   pruneStaleVectors(session, chunks);
   const embeddedChunks = countEmbeddedChunkAliases(session, chunks);
-  const embeddedUniqueChunks = uniqueChunks.filter((chunk) =>
-    session.vectors.has(chunk.embeddingId)
-  ).length;
 
   return {
     chunkCount: chunks.length,
     embeddedChunks,
-    uniqueChunkCount: uniqueChunks.length,
-    embeddedUniqueChunks,
   };
 }
 
@@ -356,13 +339,11 @@ async function embedMissingChunks(
   session: SemanticVectorSession,
   sessionCacheKey: string,
   chunks: ScriptChunk[],
-  settings: SemanticSettings,
-  onProgress?: (progress: SemanticSearchProgress) => void
+  settings: SemanticSettings
 ): Promise<void> {
   pruneStaleVectors(session, chunks);
 
   const uniqueChunks = uniqueChunksByEmbedding(chunks);
-  let loadedFromDisk = 0;
 
   if (settings.saveEmbeddingsToDisk) {
     for (const chunk of uniqueChunks) {
@@ -374,7 +355,6 @@ async function embedMissingChunks(
       if (!embedding) continue;
 
       session.vectors.set(chunk.embeddingId, embedding);
-      loadedFromDisk += 1;
     }
   }
 
@@ -395,17 +375,6 @@ async function embedMissingChunks(
       toEmbed.push(chunk);
     }
   }
-
-  const alreadyEmbedded = countEmbeddedChunkAliases(session, chunks);
-
-  onProgress?.({
-    message:
-      missing.length === 0
-        ? `Using cached embeddings for ${chunks.length} chunks`
-        : `Embedding ${toEmbed.length} unique chunks (${alreadyEmbedded} chunk hits cached, ${loadedFromDisk} loaded from disk, ${waitingForExisting.length} already running)`,
-    completed: alreadyEmbedded,
-    total: chunks.length,
-  });
 
   const batchSize = getEmbeddingBatchSize(settings);
   for (let i = 0; i < toEmbed.length; i += batchSize) {
@@ -455,22 +424,11 @@ async function embedMissingChunks(
       }
     }
 
-    onProgress?.({
-      message: `Embedded ${Math.min(i + batch.length, toEmbed.length)} of ${toEmbed.length} new unique chunks`,
-      completed: countEmbeddedChunkAliases(session, chunks),
-      total: chunks.length,
-    });
-
     await new Promise((resolve) => setImmediate(resolve));
   }
 
   if (waitingForExisting.length > 0) {
     await Promise.all(waitingForExisting);
-    onProgress?.({
-      message: "Reused embeddings from another running index job",
-      completed: countEmbeddedChunkAliases(session, chunks),
-      total: chunks.length,
-    });
   }
 }
 
@@ -487,18 +445,9 @@ export async function semanticSearchScripts(
   settings: SemanticSettings,
   query: string,
   limit: number,
-  minScore?: number,
-  onProgress?: (progress: SemanticSearchProgress) => void
+  minScore?: number
 ): Promise<SemanticSearchOutput> {
   const chunks = buildChunks(index.scripts);
-  onProgress?.({
-    message: index.hasFinishedMapping
-      ? `Prepared ${chunks.length} code chunks`
-      : `Prepared ${chunks.length} code chunks while scripts are still syncing (${index.mappedSources}/${index.sourcesToMap})`,
-    completed: 0,
-    total: chunks.length,
-  });
-
   const key = sessionKey(index, settings);
   const session = getOrCreateSession(key);
 
@@ -521,36 +470,13 @@ export async function semanticSearchScripts(
   const totalUniqueCount = uniqueChunks.length;
   const isFullyIndexed = embeddedUniqueCount >= totalUniqueCount;
 
-  if (isFullyIndexed) {
-    // Fully indexed — embed any remaining aliases and search
-    await embedMissingChunks(session, key, chunks, settings, onProgress);
-  } else if (embeddedCount > 0) {
-    // Partially indexed — skip blocking embed, search from what we have
-    onProgress?.({
-      message: `Searching from ${embeddedCount}/${chunks.length} cached embeddings (index incomplete: ${embeddedUniqueCount}/${totalUniqueCount} unique chunks)`,
-      completed: embeddedCount,
-      total: chunks.length,
-    });
-  } else {
-    // No embeddings at all — must embed everything
-    await embedMissingChunks(session, key, chunks, settings, onProgress);
+  if (isFullyIndexed || embeddedCount === 0) {
+    await embedMissingChunks(session, key, chunks, settings);
   }
-
-  onProgress?.({
-    message: "Embedding query",
-    completed: chunks.length,
-    total: chunks.length + 1,
-  });
 
   const queryTokens = expandQueryTokens(query);
   const [queryEmbedding] = await embedTexts(settings, [`Roblox Luau code search query: ${query}`]);
   if (!queryEmbedding) throw new Error("Embedding provider returned no query vector.");
-
-  onProgress?.({
-    message: "Ranking chunks",
-    completed: chunks.length + 1,
-    total: chunks.length + 1,
-  });
 
   const chunkById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
   const denseScores = new Map<string, number>();
@@ -622,8 +548,7 @@ export async function semanticSearchScripts(
 
 export async function semanticIndexCodebase(
   index: ScriptSourceIndex,
-  settings: SemanticSettings,
-  onProgress?: (progress: SemanticSearchProgress) => void
+  settings: SemanticSettings
 ): Promise<{
   chunkCount: number;
   embeddedChunks: number;
@@ -631,18 +556,10 @@ export async function semanticIndexCodebase(
   isPartialIndex: boolean;
 }> {
   const chunks = buildChunks(index.scripts);
-  onProgress?.({
-    message: index.hasFinishedMapping
-      ? `Prepared ${chunks.length} code chunks`
-      : `Prepared ${chunks.length} code chunks while scripts are still syncing (${index.mappedSources}/${index.sourcesToMap})`,
-    completed: 0,
-    total: chunks.length,
-  });
-
   const key = sessionKey(index, settings);
   const session = getOrCreateSession(key);
 
-  await embedMissingChunks(session, key, chunks, settings, onProgress);
+  await embedMissingChunks(session, key, chunks, settings);
   const stats = getSemanticIndexStats(index, settings);
   const sourceIndexComplete = index.sourceIndexComplete;
   return {
@@ -665,33 +582,4 @@ export function clearSemanticIndexForClient(clientId: string): void {
       inFlightEmbeddingsByKey.delete(key);
     }
   }
-}
-
-export function clearAllSemanticIndexes(): void {
-  vectorSessionsByKey.clear();
-  inFlightEmbeddingsByKey.clear();
-}
-
-export function getScriptIndexStatus(
-  debugId: string,
-  index: ScriptSourceIndex,
-  settings: SemanticSettings
-): { totalChunks: number; embeddedChunks: number; isFullyIndexed: boolean } {
-  const script = index.scripts.find((s) => s.debugId === debugId);
-  if (!script) return { totalChunks: 0, embeddedChunks: 0, isFullyIndexed: false };
-
-  const templates = chunkTemplatesForSource(script);
-  const key = sessionKey(index, settings);
-  const session = vectorSessionsByKey.get(key);
-
-  if (!session || templates.length === 0) {
-    return { totalChunks: templates.length, embeddedChunks: 0, isFullyIndexed: false };
-  }
-
-  let embedded = 0;
-  for (const chunk of templates) {
-    if (session.vectors.has(chunk.embeddingId)) embedded++;
-  }
-
-  return { totalChunks: templates.length, embeddedChunks: embedded, isFullyIndexed: embedded >= templates.length };
 }

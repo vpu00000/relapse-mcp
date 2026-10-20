@@ -2,7 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { clientStampPrefix, toolTextResponse, type ToolTextResponse } from "../../factory.js";
-import { isSecondaryRelay, relayToolToApi } from "../../factory.js";
 import { maxOutputCharsSchema } from "../../schemas.js";
 import { fetchScriptSearchIndex, type ScriptSearchDocument } from "./script-sources.js";
 
@@ -54,7 +53,6 @@ function searchScripts(
   options: SearchOptions
 ): { matches: ScriptMatch[]; totalMatches: number; limited: boolean } {
   // Clamp every numeric parameter so a single MCP call cannot flood context.
-  // (Mirrors the hard caps the HTTP /api/tool relay already enforces.)
   const limit = clampInt(options.limit, 10, 1, 100);
   const contextLines = clampInt(options.contextLines, 1, 0, 10);
   const maxMatchesPerScript = clampInt(options.maxMatchesPerScript, 3, 1, 50);
@@ -187,23 +185,6 @@ export default function register(server: McpServer): void {
       }),
     },
     async (options): Promise<ToolTextResponse> => {
-      // Secondary mode: script sources live on the primary, relay the request.
-      if (isSecondaryRelay()) {
-        return relayToolToApi("script-grep", {
-          query: options.query,
-          limit: options.limit,
-          contextLines: options.contextLines,
-          maxMatchesPerScript: options.maxMatchesPerScript,
-          maxResults: options.maxResults,
-          literal: options.literal,
-          caseSensitive: options.caseSensitive,
-          maxOutputChars: options.maxOutputChars,
-        }, 60000, {
-          maxOutputChars: options.maxOutputChars,
-          truncationHint: "Rerun script-grep with a narrower query, lower limit, or lower maxResults.",
-        });
-      }
-
       let regex: RegExp;
       try {
         regex = compileQuery(options.query, options.literal, options.caseSensitive);

@@ -1,6 +1,6 @@
 ---
 name: roblox-mcp
-description: Inspect, search, debug, and intentionally modify a connected Roblox client through roblox-executor-mcp or roblox-client-mcp. Use for live instance or script inspection, Luau data probes, garbage-collector searches, remote inspection, client-side execution, Roblox UI interaction, and Roblox window capture.
+description: Inspect, search, debug, and intentionally modify a Roblox client through Relapse MCP. Use for live instance or script inspection, Luau data probes, garbage-collector searches, remote inspection, client-side execution, Roblox UI interaction, and Roblox window capture.
 ---
 
 # Roblox MCP

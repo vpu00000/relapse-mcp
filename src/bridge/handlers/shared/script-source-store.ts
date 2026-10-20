@@ -5,9 +5,7 @@ export interface StoredScriptSource {
   debugId: string;
   path: string;
   source: string;
-  scriptHash?: string;
   sourceHash: string;
-  updatedAt: number;
 }
 
 export interface ScriptSourceIndex {
@@ -25,10 +23,6 @@ export interface ScriptSourceIndex {
 }
 
 export type ScriptSourceIndexSummary = Omit<ScriptSourceIndex, "scripts">;
-
-export interface ScriptSourceUpsertResult extends ScriptSourceIndexSummary {
-  acceptedMappingRevision?: number;
-}
 
 export interface ScriptSourceStoreIdentity {
   clientId: string;
@@ -49,7 +43,6 @@ interface ClientScriptSourceStore {
   activeScripts: Map<string, StoredScriptSource>;
   activeRevisionByScriptId: Map<string, number>;
   scripts: Map<string, StoredScriptSource>;
-  scriptsByHash: Map<string, StoredScriptSource>;
 }
 
 export interface UpsertScriptSourcesInput {
@@ -61,22 +54,11 @@ export interface UpsertScriptSourcesInput {
   mappingSessionStartedAt?: unknown;
   mappingRevision?: unknown;
   beginMappingSession?: unknown;
-  removedScriptIds?: unknown[];
   scripts?: {
     debugId?: unknown;
     path?: unknown;
     source?: unknown;
-    scriptHash?: unknown;
   }[];
-}
-
-export interface CachedScriptSourceByHash {
-  scriptHash: string;
-  debugId: string;
-  path: string;
-  source: string;
-  sourceHash: string;
-  updatedAt: number;
 }
 
 const storesByClientId: Map<string, ClientScriptSourceStore> = new Map();
@@ -96,13 +78,6 @@ function isUnusableDecompiledSource(source: string): boolean {
   );
 }
 
-function normalizeScriptHash(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 512) return undefined;
-  return trimmed;
-}
-
 function getOrCreateStore(identity: ScriptSourceStoreIdentity): ClientScriptSourceStore {
   let store = storesByClientId.get(identity.clientId);
   if (!store || store.placeId !== identity.placeId || store.jobId !== identity.jobId) {
@@ -118,22 +93,10 @@ function getOrCreateStore(identity: ScriptSourceStoreIdentity): ClientScriptSour
       activeScripts: new Map(),
       activeRevisionByScriptId: new Map(),
       scripts: new Map(),
-      scriptsByHash: new Map(),
     };
     storesByClientId.set(identity.clientId, store);
   }
   return store;
-}
-
-function updateScriptHashIndex(
-  store: ClientScriptSourceStore,
-  script: StoredScriptSource
-): void {
-  if (!script.scriptHash) return;
-  const indexed = store.scriptsByHash.get(script.scriptHash);
-  if (!indexed || indexed.debugId === script.debugId || script.updatedAt >= indexed.updatedAt) {
-    store.scriptsByHash.set(script.scriptHash, script);
-  }
 }
 
 function dropUnusableStoredScript(
@@ -143,9 +106,6 @@ function dropUnusableStoredScript(
   store.scripts.delete(script.debugId);
   store.activeScripts.delete(script.debugId);
   store.activeRevisionByScriptId.delete(script.debugId);
-  if (script.scriptHash && store.scriptsByHash.get(script.scriptHash) === script) {
-    store.scriptsByHash.delete(script.scriptHash);
-  }
 }
 
 function canActivateScriptSource(
@@ -185,18 +145,13 @@ function getScriptSourceIndexSummary(
   };
 }
 
-interface MappingRevisionDecision {
-  acceptsStatus: boolean;
-  acceptedMappingRevision?: number;
-}
-
 function applyMappingRevision(
   store: ClientScriptSourceStore,
   input: UpsertScriptSourcesInput
-): MappingRevisionDecision {
+): boolean {
   const usesRevisionProtocol =
     input.mappingSessionId !== undefined || input.mappingRevision !== undefined;
-  if (!usesRevisionProtocol) return { acceptsStatus: true };
+  if (!usesRevisionProtocol) return true;
 
   const sessionId =
     typeof input.mappingSessionId === "string" && input.mappingSessionId.length <= 160
@@ -214,10 +169,7 @@ function applyMappingRevision(
       : undefined;
 
   if (!sessionId || revision === undefined || revision < 0) {
-    return {
-      acceptsStatus: false,
-      acceptedMappingRevision: store.mappingRevision,
-    };
+    return false;
   }
 
   if (input.beginMappingSession === true && store.mappingSessionId !== sessionId) {
@@ -226,10 +178,7 @@ function applyMappingRevision(
       (store.mappingSessionStartedAt !== undefined &&
         sessionStartedAt <= store.mappingSessionStartedAt)
     ) {
-      return {
-        acceptsStatus: false,
-        acceptedMappingRevision: store.mappingRevision,
-      };
+      return false;
     }
     store.mappingSessionId = sessionId;
     store.mappingSessionStartedAt = sessionStartedAt;
@@ -243,40 +192,37 @@ function applyMappingRevision(
   }
 
   if (store.mappingSessionId !== sessionId || revision <= store.mappingRevision) {
-    return {
-      acceptsStatus: false,
-      acceptedMappingRevision: store.mappingRevision,
-    };
+    return false;
   }
   store.mappingSessionId = sessionId;
   store.mappingRevision = revision;
-  return { acceptsStatus: true, acceptedMappingRevision: revision };
+  return true;
 }
 
 export function upsertScriptSources(
   identity: ScriptSourceStoreIdentity,
   input: UpsertScriptSourcesInput
-): ScriptSourceUpsertResult {
+): void {
   const store = getOrCreateStore(identity);
-  const revision = applyMappingRevision(store, input);
+  const acceptsStatus = applyMappingRevision(store, input);
   const inputRevision =
     typeof input.mappingRevision === "number" && Number.isSafeInteger(input.mappingRevision)
       ? input.mappingRevision
       : undefined;
 
-  if (revision.acceptsStatus && typeof input.hasFinishedMapping === "boolean") {
+  if (acceptsStatus && typeof input.hasFinishedMapping === "boolean") {
     store.hasFinishedMapping = input.hasFinishedMapping;
   }
 
-  if (revision.acceptsStatus && typeof input.sourcesToMap === "number" && Number.isFinite(input.sourcesToMap)) {
+  if (acceptsStatus && typeof input.sourcesToMap === "number" && Number.isFinite(input.sourcesToMap)) {
     store.sourcesToMap = Math.max(0, Math.floor(input.sourcesToMap));
   }
 
-  if (revision.acceptsStatus && typeof input.processedSources === "number" && Number.isFinite(input.processedSources)) {
+  if (acceptsStatus && typeof input.processedSources === "number" && Number.isFinite(input.processedSources)) {
     store.processedSources = Math.max(0, Math.floor(input.processedSources));
   }
 
-  if (revision.acceptsStatus && typeof input.skippedSources === "number" && Number.isFinite(input.skippedSources)) {
+  if (acceptsStatus && typeof input.skippedSources === "number" && Number.isFinite(input.skippedSources)) {
     store.skippedSources = Math.max(0, Math.floor(input.skippedSources));
   }
 
@@ -299,16 +245,13 @@ export function upsertScriptSources(
 
     const existing = store.scripts.get(script.debugId);
     const sourceHash = hashSource(script.source);
-    const scriptHash = normalizeScriptHash(script.scriptHash);
 
     if (existing && existing.sourceHash === sourceHash) {
       const updated = {
         ...existing,
         path: script.path,
-        scriptHash: scriptHash ?? existing.scriptHash,
       };
       store.scripts.set(script.debugId, updated);
-      updateScriptHashIndex(store, updated);
       if (canActivateScriptSource(store, input, inputRevision, script.debugId)) {
         store.activeScripts.set(script.debugId, updated);
         if (inputRevision !== undefined) {
@@ -322,12 +265,9 @@ export function upsertScriptSources(
       debugId: script.debugId,
       path: script.path,
       source: script.source,
-      scriptHash,
       sourceHash,
-      updatedAt: Date.now(),
     };
     store.scripts.set(script.debugId, updated);
-    updateScriptHashIndex(store, updated);
     if (canActivateScriptSource(store, input, inputRevision, script.debugId)) {
       store.activeScripts.set(script.debugId, updated);
       if (inputRevision !== undefined) {
@@ -335,56 +275,6 @@ export function upsertScriptSources(
       }
     }
   }
-
-  // Tombstones are status-bearing operations and must obey revision ordering.
-  // Source payloads may safely heal from stale same-session requests, but a
-  // stale removal must never delete a script that a newer revision re-added.
-  if (revision.acceptsStatus && Array.isArray(input.removedScriptIds)) {
-    for (const debugId of input.removedScriptIds) {
-      if (typeof debugId !== "string" || debugId.length === 0 || debugId.length > 512) continue;
-      store.activeScripts.delete(debugId);
-      if (inputRevision !== undefined) store.activeRevisionByScriptId.set(debugId, inputRevision);
-    }
-  }
-
-  return {
-    ...getScriptSourceIndexSummary(identity, store),
-    acceptedMappingRevision: revision.acceptedMappingRevision,
-  };
-}
-
-export function getCachedScriptSourcesByScriptHash(
-  identity: ScriptSourceStoreIdentity,
-  scriptHashes: unknown[]
-): CachedScriptSourceByHash[] {
-  const store = getOrCreateStore(identity);
-  const wanted = new Set<string>();
-  for (const hash of scriptHashes) {
-    const normalized = normalizeScriptHash(hash);
-    if (normalized) wanted.add(normalized);
-  }
-
-  if (wanted.size === 0) return [];
-
-  const results: CachedScriptSourceByHash[] = [];
-  for (const scriptHash of wanted) {
-    const script = store.scriptsByHash.get(scriptHash);
-    if (!script) continue;
-    if (isUnusableDecompiledSource(script.source)) {
-      dropUnusableStoredScript(store, script);
-      continue;
-    }
-    results.push({
-      scriptHash,
-      debugId: script.debugId,
-      path: script.path,
-      source: script.source,
-      sourceHash: script.sourceHash,
-      updatedAt: script.updatedAt,
-    });
-  }
-
-  return results;
 }
 
 export function getScriptSourceIndex(identity: ScriptSourceStoreIdentity): ScriptSourceIndex {

@@ -1,6 +1,5 @@
 import type { SemanticSettings } from "./settings.js";
 import {
-  getSemanticProviderModel,
   normalizeOpenAIBaseUrl,
   normalizeOllamaBaseUrl,
   validateSemanticSettings,
@@ -144,19 +143,4 @@ export async function embedTexts(
   return settings.provider === "openai"
     ? embedWithOpenAI(settings, inputs)
     : embedWithOllama(settings, inputs);
-}
-
-export async function testEmbeddingProvider(settings: SemanticSettings): Promise<{
-  provider: SemanticSettings["provider"];
-  model: string;
-  dimensions: number;
-}> {
-  const [embedding] = await embedTexts(settings, ["Roblox MCP semantic search test"]);
-  if (!embedding) throw new EmbeddingProviderError("Embedding provider returned no test vector.");
-
-  return {
-    provider: settings.provider,
-    model: getSemanticProviderModel(settings),
-    dimensions: embedding.length,
-  };
 }

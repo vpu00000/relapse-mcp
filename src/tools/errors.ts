@@ -4,7 +4,7 @@ export const NO_CLIENT_ERROR: ToolTextResponse = {
   content: [
     {
       type: "text",
-      text: "No Roblox client connected to the MCP server. Please notify the user that they have to run the connector.luau script in order to connect the MCP server to their game.",
+      text: "Relapse has no ready Roblox session or its MCP channel is still connecting. Start the game and retry shortly.",
     },
   ],
   isError: true,

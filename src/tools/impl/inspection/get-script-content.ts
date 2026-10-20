@@ -2,7 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerClientTool } from "../../client-routing.js";
 import { z } from "zod";
 import { clientStampPrefix, sendAndWait, toolTextResponse } from "../../factory.js";
-import { isSecondaryRelay, relayToolToApi } from "../../factory.js";
 import { maxOutputCharsSchema } from "../../schemas.js";
 import { fetchScriptSearchIndex, type ScriptSearchDocument } from "./script-sources.js";
 
@@ -95,21 +94,6 @@ export default function register(server: McpServer): void {
       }),
     },
     async ({ scriptGetterSource, scriptPath, startLine, endLine, maxLines, maxOutputChars }) => {
-      // Secondary mode: relay to primary which has the script source index.
-      if (isSecondaryRelay()) {
-        return relayToolToApi("get-script-content", {
-          ...(scriptGetterSource !== undefined ? { scriptGetterSource } : {}),
-          ...(scriptPath !== undefined ? { scriptPath } : {}),
-          ...(startLine !== undefined ? { startLine } : {}),
-          ...(endLine !== undefined ? { endLine } : {}),
-          maxLines,
-          maxOutputChars,
-        }, 60000, {
-          maxOutputChars,
-          truncationHint: "Rerun get-script-content with startLine/endLine or a smaller maxLines value.",
-        });
-      }
-
       if (scriptGetterSource === undefined && scriptPath === undefined) {
         return toolTextResponse("Must provide either scriptGetterSource or scriptPath.", {}, true);
       } else if (scriptGetterSource !== undefined && scriptPath !== undefined) {

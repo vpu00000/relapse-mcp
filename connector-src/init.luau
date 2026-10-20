@@ -1,308 +1,270 @@
--- Source entrypoint for connector.luau. Build the standalone artifact with
--- `npm run build:connector`; edit connector-src modules, not the generated file.
---// Variables \\--
-if getgenv().MCP_Loaded == true then
+local channelName = __relapse_mcp_channel
+if not game:IsLoaded() then game.Loaded:Wait() end
+local env = getgenv()
+local key = "__relapse_mcp_" .. channelName
+local previous = env[key]
+if previous and previous.publish then
+    previous.publish()
     return
 end
 
-getgenv().MCP_Loaded = true
+local cloneref = cloneref or function(value) return value end
+local HttpService = cloneref(game:GetService("HttpService"))
+local LogService = cloneref(game:GetService("LogService"))
+local Players = cloneref(game:GetService("Players"))
+local MarketplaceService = cloneref(game:GetService("MarketplaceService"))
+local RobloxReplicatedStorage = cloneref(game:GetService("RobloxReplicatedStorage"))
+local CoreGui = cloneref(game:GetService("CoreGui"))
+local CorePackages = cloneref(game:GetService("CorePackages"))
+local ScriptContext = cloneref(game:GetService("ScriptContext"))
+local VirtualInputManager = cloneref(Instance.new("VirtualInputManager"))
 
-local BridgeURL = getgenv().BridgeURL or getgenv().bridgeurl or ... or "localhost:16384"
-getgenv().BridgeURL = BridgeURL
-getgenv().bridgeurl = BridgeURL
-
---// Wait for game to load \\--
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
-
---// Services \\--
-local cloneref = cloneref or function(x) return x end
-
-local RobloxReplicatedStorage: RobloxReplicatedStorage = cloneref(game:GetService("RobloxReplicatedStorage"))
-local VirtualInputManager: VirtualInputManager = cloneref(Instance.new("VirtualInputManager"))
-local MarketplaceService: MarketplaceService = cloneref(game:GetService("MarketplaceService"))
-local CoreGui: CoreGui = cloneref(game:GetService("CoreGui"))
-local CorePackages: CorePackages = cloneref(game:GetService("CorePackages"))
-local ScriptContext: ScriptContext = cloneref(game:GetService("ScriptContext"))
-local HttpService: HttpService = cloneref(game:GetService("HttpService"))
-local LogService: LogService = cloneref(game:GetService("LogService"))
-local Players: Players = cloneref(game:GetService("Players"))
-
---// Libraries \\--
-
-local base64_encode
-do
-    -- Lua 5.1+ base64 v3.0 (c) 2009 by Alex Kloss <alexthkloss@web.de>
-    -- licensed under the terms of the LGPL2
-    
-    -- character table string
-    local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    
-    -- encoding
-    base64_encode = base64encode or function(data)
-        return ((data:gsub('.', function(x) 
-            local r,b='',x:byte()
-            for i=8,1,-1 do r=r..(b%2^i-b%2^(i-1)>0 and '1' or '0') end
-            return r;
-        end)..'0000'):gsub('%d%d%d?%d?%d?%d?', function(x)
-            if (#x < 6) then return '' end
-            local c=0
-            for i=1,6 do c=c+(x:sub(i,i)=='1' and 2^(6-i) or 0) end
-            return b:sub(c+1,c+1)
-        end)..({ '', '==', '=' })[#data%3+1])
+local function sanitize(value, depth, seen)
+    local kind = typeof(value)
+    if kind == "Instance" then
+        local ok, name = pcall(function() return value:GetFullName() end)
+        return ok and name or tostring(value)
     end
-end
-
---// Functions \\--
-local getscriptbytecode = getscriptbytecode or function(_) error("Unable to get script bytecode.") end
-local GetScriptHash = type(getscripthash) == "function" and getscripthash or nil
-local BuiltInDecompile = type(decompile) == "function" and decompile or nil
-
-local LuaEncode = loadstring(game:HttpGet("https://raw.githubusercontent.com/chadhyatt/LuaEncode/refs/heads/master/src/LuaEncode.lua"))()
-
---// Bounded serialization: cap depth / entries / string length and render
---// Instances as their path so structured tool responses can't flood the
---// model context with raw dumps before the server-side char limit applies. \\--
-local SANITIZE_MAX_DEPTH = 8
-local SANITIZE_MAX_ENTRIES = 60
-local SANITIZE_MAX_STRING = 500
-
-local function SanitizeForOutput(value, depth, seen)
-    depth = depth or 0
-    local valueType = typeof(value)
-
-    if valueType == "Instance" then
-        local ok, full = pcall(function() return value:GetFullName() end)
-        return ok and full or tostring(value)
-    elseif valueType == "string" then
-        if #value > SANITIZE_MAX_STRING then
-            return string.sub(value, 1, SANITIZE_MAX_STRING)
-                .. "…(+" .. (#value - SANITIZE_MAX_STRING) .. " chars omitted)"
-        end
+    if kind == "string" then
+        if #value > 500 then return value:sub(1, 500) .. "… [truncated]" end
         return value
-    elseif valueType == "number" or valueType == "boolean" or valueType == "nil" then
-        return value
-    elseif valueType ~= "table" then
-        -- functions, userdata, threads, Vector3, CFrame, etc.
-        return tostring(value)
     end
-
-    if depth >= SANITIZE_MAX_DEPTH then
-        return "<table: max depth reached>"
-    end
-
-    seen = seen or {}
-    if seen[value] then
-        return "<cyclic table>"
-    end
+    if kind == "number" or kind == "boolean" or kind == "nil" then return value end
+    if kind ~= "table" then return tostring(value) end
+    if depth >= 8 then return "<max depth>" end
+    if seen[value] then return "<cycle>" end
     seen[value] = true
-
     local result = {}
     local count = 0
-    local omitted = 0
-    for k, v in pairs(value) do
-        if count >= SANITIZE_MAX_ENTRIES then
-            omitted += 1
-            continue
-        end
+    for itemKey, itemValue in value do
         count += 1
-        local key = k
-        if typeof(k) ~= "string" and typeof(k) ~= "number" then
-            key = tostring(k)
-        end
-        result[key] = SanitizeForOutput(v, depth + 1, seen)
+        if count > 60 then result.__omitted = "more entries omitted" break end
+        local key = if type(itemKey) == "string" or type(itemKey) == "number" then itemKey else tostring(itemKey)
+        result[key] = sanitize(itemValue, depth + 1, seen)
     end
-    if omitted > 0 then
-        result["__omitted"] = omitted .. " more entries omitted"
-    end
-
     seen[value] = nil
     return result
 end
 
---// Strip the decompiler banner line (e.g. "-- Decompiled with lua.expert")
---// so it doesn't repeat as noise across every script read/grep/search. \\--
-local function StripDecompilerBanner(source)
-    if typeof(source) ~= "string" then return source end
-    return (string.gsub(source, "^%s*%-%-[^\n]*[Dd]ecompiled[^\n]*\n", "", 1))
-end
-
-local getnilinstances = getnilinstances or function() return {} end
-
---// Compatibility Check \\--
-local WebSocketAvailable = (
-    typeof(WebSocket) ~= "nil" and
-    typeof(WebSocket.connect) == "function"
-) and (getgenv().DisableWebSocket ~= true)
-
---// Registration Info \\--
-local function GenerateSessionGuid()
-    local success, guid = pcall(function()
-        return HttpService:GenerateGUID(false)
-    end)
-    if success and type(guid) == "string" and guid ~= "" then
-        return guid
-    end
-    return tostring(os.clock()) .. "-" .. tostring(math.random(1, 1000000000))
-end
-
-local function GetClientIdentityKey()
-    local player = Players.LocalPlayer
-    return table.concat({
-        tostring(game.PlaceId or 0),
-        tostring(game.JobId or ""),
-        tostring(player and player.UserId or 0),
-    }, ":")
-end
-
-local function GetStableClientSessionId()
-    local identityKey = GetClientIdentityKey()
-    if type(getgenv().MCP_ClientSessionId) ~= "string" or getgenv().MCP_ClientIdentityKey ~= identityKey then
-        getgenv().MCP_ClientSessionId = GenerateSessionGuid()
-        getgenv().MCP_ClientIdentityKey = identityKey
-    end
-    return getgenv().MCP_ClientSessionId
-end
-
-local function GetRegistrationInfo()
-    local player = Players.LocalPlayer
-    local placeName = "Unknown"
-    pcall(function()
-        local productInfo = MarketplaceService:GetProductInfo(game.PlaceId)
-        placeName = productInfo.Name
-    end)
-    return {
-        type = "register",
-        username = player and player.Name or "Unknown",
-        userId = player and player.UserId or 0,
-        placeId = game.PlaceId,
-        jobId = game.JobId,
-        placeName = placeName,
-        sessionId = GetStableClientSessionId(),
-    }
-end
-
---// Bridge client \\--
-local BridgeClient = require("./bridge/client")({
-    HttpService = HttpService,
-    BridgeURL = BridgeURL,
-    WebSocketAvailable = WebSocketAvailable,
-    GetRegistrationInfo = GetRegistrationInfo,
-    SanitizeForOutput = SanitizeForOutput,
-    LuaEncode = LuaEncode,
-})
-local CreateBridge = BridgeClient.CreateBridge
-
---// Script source mapping modules \\--
-local WorkerPool = require("./utils/worker")
-local ScriptMappingState = require("./mapping/state")
-local UploadSession = require("./mapping/upload-session")
-local DecompilerAttemptState = require("./decompiler/attempt-state")
-local PreparedScript = require("./decompiler/prepared-script")
-local ScriptMappingPipeline = ScriptMappingState.new()
-local ScriptMappingWorkerCount = math.max(
-    1,
-    math.min(math.floor(tonumber(getgenv().MCP_ScriptMappingWorkers) or 24), 64)
-)
-local MappingConcurrency = require("./mapping/concurrency").new(
-    ScriptMappingPipeline,
-    ScriptMappingWorkerCount
-)
-local FailedScriptResyncInterval = math.max(
-    5,
-    math.min(tonumber(getgenv().MCP_FailedScriptResyncInterval) or 30, 600)
-)
-local FailedScriptResync = require("./mapping/failed-resync").new(ScriptMappingPipeline, {
-    IntervalSeconds = FailedScriptResyncInterval,
-    MaxDelaySeconds = math.max(FailedScriptResyncInterval, 300),
-    BatchSize = math.max(
-        1,
-        math.min(math.floor(tonumber(getgenv().MCP_FailedScriptResyncBatchSize) or 8), 32)
-    ),
-})
-local MappingJobStatus = require("./mapping/job-status").new(
-    ScriptMappingPipeline,
-    FailedScriptResync
-)
-local UploadClient = require("./mapping/upload-client")({
-    ScriptMappingPipeline = ScriptMappingPipeline,
-    HttpService = HttpService,
-    BridgeURL = BridgeURL,
-    JobStatus = MappingJobStatus,
-})
-local DecompilerClient = require("./decompiler/client")({
-    ScriptMappingPipeline = ScriptMappingPipeline,
-    HttpService = HttpService,
-    BridgeURL = BridgeURL,
-    StripDecompilerBanner = StripDecompilerBanner,
-    base64_encode = base64_encode,
-    BuiltInDecompile = BuiltInDecompile,
-    GetScriptHash = GetScriptHash,
-    DecompilerAttemptState = DecompilerAttemptState,
-    PreparedScript = PreparedScript,
-    Concurrency = MappingConcurrency,
-})
-local MappingLifecycle = require("./mapping/lifecycle")({
-    ScriptMappingPipeline = ScriptMappingPipeline,
-    WorkerPool = WorkerPool,
-    UploadSession = UploadSession,
-    GenerateSessionGuid = GenerateSessionGuid,
-    CoreGui = CoreGui,
-    CorePackages = CorePackages,
-    ScriptContext = ScriptContext,
-    getnilinstances = getnilinstances,
-    WorkerCount = ScriptMappingWorkerCount,
-    Concurrency = MappingConcurrency,
-    JobStatus = MappingJobStatus,
-    FailedResync = FailedScriptResync,
-    UploadClient = UploadClient,
-    DecompilerClient = DecompilerClient,
-})
-local StartUploadQueue = UploadClient.StartUploadQueue
-local function PublishScriptMappingStatus()
-    MappingJobStatus:Publish()
-end
-local StartScriptMapping = MappingLifecycle.StartScriptMapping
-local StartFailedScriptResync = MappingLifecycle.StartFailedScriptResync
-local ResetScriptMappingState = MappingLifecycle.ResetScriptMappingState
-local ResumeDeferredScriptMappings = MappingLifecycle.ResumeDeferredScriptMappings
-local GetScriptByDebugId = MappingLifecycle.GetScriptByDebugId
-local QueueMappedScriptSource = MappingLifecycle.QueueMappedScriptSource
-local DecompileScriptSource = MappingLifecycle.DecompileScriptSource
-
-local function WaitForBridgeClientId(Bridge)
-    local deadline = os.clock() + 5
-    repeat
-        if Bridge.ClientId then
-            return Bridge.ClientId
+local function serialize(value, depth, seen)
+    local kind = type(value)
+    if kind == "string" then return string.format("%q", value) end
+    if kind == "number" or kind == "boolean" then return tostring(value) end
+    if kind == "nil" then return "nil" end
+    if kind ~= "table" then return string.format("%q", tostring(value)) end
+    if depth >= 8 or seen[value] then return "{...}" end
+    seen[value] = true
+    local parts = {}
+    local count = 0
+    local nextIndex = 1
+    for itemKey, itemValue in value do
+        count += 1
+        if count > 60 then parts[#parts + 1] = "..." break end
+        local label = "[" .. serialize(itemKey, depth + 1, seen) .. "] = "
+        if itemKey == nextIndex then
+            label = ""
+            nextIndex += 1
         end
-        if not Bridge.Connected then
-            return nil
-        end
-        task.wait(0.05)
-    until os.clock() > deadline
+        parts[#parts + 1] = label .. serialize(itemValue, depth + 1, seen)
+    end
+    seen[value] = nil
+    return "{" .. table.concat(parts, ", ") .. "}"
+end
 
+local state = { channel = nil, peers = {}, scripts = {}, scanGeneration = 0,
+    mappingSessionId = "", mappingStartedAt = 0, revision = 0,
+    descendantAdded = nil, descendantRemoving = nil, rescanScheduled = false }
+local Bridge = { Callbacks = {}, RawCallbacks = {} }
+function Bridge:BindToType(kind, callback) self.Callbacks[kind] = callback end
+function Bridge:BindToTypeRaw(kind, callback)
+    self.Callbacks[kind] = callback
+    self.RawCallbacks[kind] = true
+end
+function Bridge:Send(payload)
+    for peer in state.peers do
+        if peer.Connected then pcall(peer.Send, peer, payload) else state.peers[peer] = nil end
+    end
+end
+function Bridge:HandleMessage(message, peer)
+    if type(message) ~= "table" or type(message.type) ~= "string" or type(message.id) ~= "string" then return end
+    local callback = self.Callbacks[message.type]
+    if not callback then
+        peer:Send({ id = message.id, error = "Unknown command: " .. message.type })
+        return
+    end
+    task.spawn(function()
+        local ok, result = pcall(callback, message)
+        if not peer.Connected then return end
+        if not ok then
+            pcall(peer.Send, peer, { id = message.id, error = tostring(result) })
+        elseif result ~= nil then
+            local output
+            if self.RawCallbacks[message.type] then
+                output = tostring(result)
+            else
+                local value = sanitize(result, 0, {})
+                if type(value) ~= "table" then value = { value } end
+                output = serialize(value, 0, {})
+            end
+            if #output > 7 * 1024 * 1024 then
+                pcall(peer.Send, peer, { id = message.id,
+                    error = "Result exceeds the Relapse channel limit. Request a smaller range or result." })
+            else
+                pcall(peer.Send, peer, { id = message.id, output = output })
+            end
+        end
+    end)
+end
+
+local function isScript(instance)
+    return instance:IsA("LuaSourceContainer") and
+        (not instance:IsA("Script") or instance.RunContext == Enum.RunContext.Client) and
+        not instance.RobloxLocked and not instance:IsDescendantOf(CoreGui) and
+        not instance:IsDescendantOf(CorePackages) and not instance:IsDescendantOf(ScriptContext)
+end
+local function readSource(instance)
+    local ok, result = pcall(decompile, instance)
+    if ok and type(result) == "string" and #result > 0 then return result end
     return nil
 end
+local function emitSources(batch, done, total, processed, skipped)
+    state.revision += 1
+    Bridge:Send({ type = "script-sources", scripts = batch,
+        hasFinishedMapping = done, sourcesToMap = total,
+        processedSources = processed, skippedSources = skipped,
+        mappingSessionId = state.mappingSessionId,
+        mappingSessionStartedAt = state.mappingStartedAt,
+        mappingRevision = state.revision,
+        beginMappingSession = state.revision == 1 })
+end
+local function scanScripts(generation)
+    state.scripts = {}
+    state.mappingSessionId = HttpService:GenerateGUID(false)
+    state.mappingStartedAt = math.max(os.time() * 1000, state.mappingStartedAt + 1)
+    state.revision = 0
+    local instances = game:QueryDescendants("LuaSourceContainer")
+    if type(getnilinstances) == "function" then
+        local ok, nilInstances = pcall(getnilinstances)
+        if ok and type(nilInstances) == "table" then
+            for _, instance in nilInstances do instances[#instances + 1] = instance end
+        end
+    end
+    local scripts, seen = {}, {}
+    for _, instance in instances do
+        local ok, selected = pcall(isScript, instance)
+        if ok and selected and not seen[instance] then
+            seen[instance] = true
+            scripts[#scripts + 1] = instance
+        end
+    end
+    local total, processed, skipped = #scripts, 0, 0
+    local batch, bytes = {}, 0
+    emitSources({}, false, total, processed, skipped)
+    for _, instance in scripts do
+        task.wait()
+        if generation ~= state.scanGeneration or not next(state.peers) then return end
+        local ok, debugId = pcall(function() return instance:GetDebugId() end)
+        local source = readSource(instance)
+        if generation ~= state.scanGeneration or not next(state.peers) then return end
+        if ok and source then
+            state.scripts[debugId] = instance
+            local pathOk, path = pcall(function() return instance:GetFullName() end)
+            if not pathOk then path = tostring(instance) end
+            local size = #source + #path + #debugId + 256
+            if size > 7 * 1024 * 1024 then
+                skipped += 1
+            else
+                if bytes + size > 512 * 1024 or #batch >= 16 then
+                    emitSources(batch, false, total, processed, skipped)
+                    batch, bytes = {}, 0
+                end
+                batch[#batch + 1] = { debugId = debugId, path = path, source = source }
+                bytes += size
+            end
+        else
+            skipped += 1
+        end
+        processed += 1
+    end
+    if generation == state.scanGeneration and next(state.peers) then
+        emitSources(batch, true, total, processed, skipped)
+    end
+end
 
-require("./bridge/runtime")({
-    CreateBridge = CreateBridge,
-    RecordBridgeEnded = BridgeClient.RecordBridgeEnded,
-    WaitForBridgeClientId = WaitForBridgeClientId,
-    ScriptMappingPipeline = ScriptMappingPipeline,
-    StartUploadQueue = StartUploadQueue,
-    PublishScriptMappingStatus = PublishScriptMappingStatus,
-    ResetScriptMappingState = ResetScriptMappingState,
-    StartScriptMapping = StartScriptMapping,
-    StartFailedScriptResync = StartFailedScriptResync,
-    ResumeDeferredScriptMappings = ResumeDeferredScriptMappings,
-    GetScriptByDebugId = GetScriptByDebugId,
-    DecompileScriptSource = DecompileScriptSource,
-    QueueMappedScriptSource = QueueMappedScriptSource,
+local function startScan()
+    state.scanGeneration += 1
+    local generation = state.scanGeneration
+    task.spawn(function()
+        setthreadidentity(8)
+        local ok, failure = pcall(scanScripts, generation)
+        if not ok then warn("Relapse MCP script scan failed: " .. tostring(failure)) end
+    end)
+end
+
+local function scheduleRescan(instance)
+    local ok, selected = pcall(isScript, instance)
+    if not ok or not selected or state.rescanScheduled or not next(state.peers) then return end
+    state.rescanScheduled = true
+    task.delay(0.5, function()
+        state.rescanScheduled = false
+        if next(state.peers) then startScan() end
+    end)
+end
+
+local context = {
     LogService = LogService,
     MarketplaceService = MarketplaceService,
     RobloxReplicatedStorage = RobloxReplicatedStorage,
     VirtualInputManager = VirtualInputManager,
-    LuaEncode = LuaEncode,
-})
+    GetScriptByDebugId = function(debugId) return state.scripts[debugId] end,
+    DecompileScriptSource = function(instance) return readSource(instance) end,
+}
+for _, registrar in {
+    require("./bridge/handlers/core"),
+    require("./bridge/handlers/scripts"),
+    require("./bridge/handlers/instances"),
+    require("./bridge/handlers/remote-spy/logs"),
+    require("./bridge/handlers/remote-spy/control"),
+    require("./bridge/handlers/input"),
+} do registrar(context, Bridge) end
+
+function state.publish()
+    if state.channel and state.channel.IsPublished then return end
+    local channel = RelapseChannel.new(channelName)
+    state.channel = channel
+    if not state.descendantAdded then
+        state.descendantAdded = game.DescendantAdded:Connect(scheduleRescan)
+        state.descendantRemoving = game.DescendantRemoving:Connect(scheduleRescan)
+    end
+    channel.Connected:Connect(function(peer)
+        state.peers[peer] = true
+        peer.Disconnected:Connect(function()
+            state.peers[peer] = nil
+            if not next(state.peers) and state.channel == channel then
+                state.scanGeneration += 1
+                state.scripts = {}
+                channel:Close()
+                state.descendantAdded:Disconnect()
+                state.descendantRemoving:Disconnect()
+                state.descendantAdded = nil
+                state.descendantRemoving = nil
+                if env[key] == state then env[key] = nil end
+            end
+        end)
+        peer.MessageReceived:Connect(function(message) Bridge:HandleMessage(message, peer) end)
+        local player = Players.LocalPlayer
+        local placeName = "Unknown"
+        pcall(function() placeName = MarketplaceService:GetProductInfo(game.PlaceId).Name end)
+        peer:Send({ type = "hello", client = {
+            username = player and player.Name or "Unknown",
+            userId = player and player.UserId or 0,
+            placeId = game.PlaceId,
+            jobId = game.JobId,
+            placeName = placeName,
+        } })
+        startScan()
+    end)
+end
+
+env[key] = state
+state.publish()

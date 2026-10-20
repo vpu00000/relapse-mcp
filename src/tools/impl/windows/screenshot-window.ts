@@ -1,7 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { BASE_URL, WS_PORT } from "../../../config.js";
-import { getInstanceRole } from "../../../bridge/handlers/shared/communication.js";
 import {
   isSupported,
   performScreenshot,
@@ -14,7 +12,7 @@ export default function register(server: McpServer): void {
     {
       title: "Take a screenshot of a Roblox window",
       description:
-        "Capture an actual OS screenshot of a Roblox window via Windows APIs. Returns a downscaled JPEG to limit vision-token cost. Provide pid when multiple windows are open; secondary servers relay capture to the primary host.",
+        "Capture an actual OS screenshot of a Roblox window via Windows APIs. Returns a downscaled JPEG to limit vision-token cost. Provide pid when multiple windows are open.",
       inputSchema: z.object({
         pid: z
           .number()
@@ -30,31 +28,6 @@ export default function register(server: McpServer): void {
       }),
     },
     async ({ pid, maxWidth }) => {
-      // Secondary mode: relay to primary via HTTP — works even if this machine isn't Windows.
-      if (getInstanceRole() === "secondary") {
-        try {
-          const primaryBase = BASE_URL ? BASE_URL.replace(/\/$/, "") : `http://localhost:${WS_PORT}`;
-          const targetUrl = primaryBase + "/api/screenshot";
-          const resp = await fetch(targetUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ pid, maxWidth }),
-          });
-          const result = (await resp.json()) as ScreenshotResult;
-          return renderScreenshotResult(result);
-        } catch (err) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Failed to relay screenshot to primary: ${(err as Error).message || err}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-
       if (!isSupported()) {
         return {
           content: [

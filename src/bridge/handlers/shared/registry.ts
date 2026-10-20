@@ -1,268 +1,45 @@
-import crypto from "crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { WebSocket } from "ws";
-import { HTTP_POLL_TIMEOUT } from "../../../config.js";
-import type { RobloxClient } from "../../types.js";
-import { clearScriptSourceIndex } from "./script-source-store.js";
-import { clearDecompilerHealthForClient } from "../../../decompiler/health.js";
+import { runtime, type RelapseClientInfo } from "../../../relapse/runtime.js";
 
-const clientRegistry: Map<string, RobloxClient> = new Map();
-const wsToClientId: Map<WebSocket, string> = new Map();
-const HTTP_CLIENT_RETENTION_MS = HTTP_POLL_TIMEOUT * 2;
-export const WS_CLIENT_RETENTION_MS = 60000;
+export interface ClientSelection { clientId?: string }
+export interface RobloxClient extends RelapseClientInfo { transport: "relapse" }
 
-let activeClientId: string | undefined = undefined;
-let activeClientIsRemote = false;
+const context = new AsyncLocalStorage<{ selection: ClientSelection; clientId?: string }>();
+let activeClientId: string | undefined;
 
-export interface ClientSelection {
-  clientId?: string;
-}
-
-const toolClientContext = new AsyncLocalStorage<{
-  clientId?: string;
-  selection: ClientSelection;
-}>();
-
-export function withClientSelection<T>(
-  selection: ClientSelection,
-  clientId: string | undefined,
-  callback: () => T
-): T {
-  return toolClientContext.run({ selection, clientId }, callback);
-}
-
-function isClientActive(entry: RobloxClient): boolean {
-  if (entry.transport === "ws") {
-    return Boolean(entry.ws && entry.ws.readyState === WebSocket.OPEN);
-  }
-  return Date.now() - entry.lastHttpPoll < HTTP_POLL_TIMEOUT;
-}
-
-function removeClient(clientId: string, reason: string): void {
-  const entry = clientRegistry.get(clientId);
-  if (!entry) return;
-  if (entry.ws) wsToClientId.delete(entry.ws);
-  entry.pendingPollResolve?.([]);
-  clientRegistry.delete(clientId);
-  if (!activeClientIsRemote && activeClientId === clientId) activeClientId = undefined;
-  clearScriptSourceIndex(clientId);
-  clearDecompilerHealthForClient(clientId);
-  console.error(`[Registry] Client ${reason}: ${clientId}`);
-}
-
-function isClientExpired(entry: RobloxClient, now: number): boolean {
-  if (entry.transport === "http") {
-    return now - entry.lastHttpPoll >= HTTP_CLIENT_RETENTION_MS;
-  }
-
-  if (entry.disconnectedAt === undefined) {
-    return false;
-  }
-
-  return now - entry.disconnectedAt >= WS_CLIENT_RETENTION_MS;
-}
-
-export function cleanupInactiveHttpClients(now = Date.now()): number {
-  let removed = 0;
-  for (const [clientId, entry] of clientRegistry) {
-    if (!isClientExpired(entry, now)) {
-      continue;
-    }
-
-    removeClient(clientId, "expired");
-    removed += 1;
-  }
-
-  return removed;
-}
-
-export function detachClientSocket(clientId: string, ws: WebSocket): void {
-  wsToClientId.delete(ws);
-
-  const entry = clientRegistry.get(clientId);
-  if (!entry || entry.ws !== ws) {
-    return;
-  }
-
-  entry.ws = undefined;
-  entry.disconnectedAt = Date.now();
-  console.error(`[Registry] Client socket closed, keeping session for reconnect: ${clientId}`);
-}
-
-const cleanupTimer = setInterval(cleanupInactiveHttpClients, HTTP_POLL_TIMEOUT);
-cleanupTimer.unref();
-
-function findClientBySessionId(sessionId: string): RobloxClient | undefined {
-  for (const entry of clientRegistry.values()) {
-    if (entry.sessionId === sessionId) return entry;
-  }
-  return undefined;
-}
-
-function findUniqueClientByIdOrPrefix(clientId: string): RobloxClient | undefined {
-  const normalized = clientId.trim();
-  if (!normalized) return undefined;
-
-  const exact = clientRegistry.get(normalized);
-  if (exact) return exact;
-
-  const matches = getActiveClients().filter((entry) => entry.clientId.startsWith(normalized));
-  return matches.length === 1 ? matches[0] : undefined;
+export function withClientSelection<T>(selection: ClientSelection, clientId: string | undefined, callback: () => T): T {
+  return context.run({ selection, clientId }, callback);
 }
 
 export function getActiveClientId(): string | undefined {
-  const context = toolClientContext.getStore();
-  if (context) return context.clientId;
-  if (!activeClientId) return undefined;
-  if (activeClientIsRemote) return activeClientId;
-  const active = clientRegistry.get(activeClientId);
-  if (!active || !isClientActive(active)) {
-    activeClientId = undefined;
-    activeClientIsRemote = false;
-    return undefined;
-  }
+  const current = context.getStore();
+  if (current) return current.clientId;
   return activeClientId;
 }
 
-export function setActiveClientId(clientId: string, options: { remote?: boolean } = {}): void {
-  const context = toolClientContext.getStore();
-  if (context) {
-    context.selection.clientId = clientId;
-    context.clientId = clientId;
-    return;
-  }
-  activeClientId = clientId;
-  activeClientIsRemote = options.remote === true;
-}
-
-export function resetRegistry(): void {
-  for (const clientId of [...clientRegistry.keys()]) removeClient(clientId, "reset");
-  wsToClientId.clear();
-  activeClientId = undefined;
-  activeClientIsRemote = false;
-}
-
-export function registerClient(info: {
-  username: string;
-  userId: number;
-  placeId: number;
-  jobId: string;
-  placeName: string;
-  sessionId?: string;
-  transport: "ws" | "http";
-  ws?: WebSocket;
-}): string {
-  const existing = info.sessionId ? findClientBySessionId(info.sessionId) : undefined;
-  if (existing) {
-    if (existing.ws && existing.ws !== info.ws) {
-      wsToClientId.delete(existing.ws);
-      try {
-        existing.ws.close();
-      } catch {
-        // Best effort cleanup; the new transport below is authoritative.
-      }
-    }
-
-    existing.pendingPollResolve?.([]);
-    existing.username = info.username;
-    existing.userId = info.userId;
-    existing.placeId = info.placeId;
-    existing.jobId = info.jobId;
-    existing.placeName = info.placeName;
-    existing.sessionId = info.sessionId;
-    existing.transport = info.transport;
-    existing.ws = info.ws;
-    existing.lastHttpPoll = Date.now();
-    existing.disconnectedAt = undefined;
-    existing.pendingPollResolve = null;
-
-    if (info.ws) {
-      wsToClientId.set(info.ws, existing.clientId);
-    }
-
-    console.error(
-      `[Registry] Client refreshed: ${existing.clientId} (${info.username} @ ${info.placeName}, ${info.transport})`
-    );
-    return existing.clientId;
-  }
-
-  const clientId = crypto.randomUUID();
-  const entry: RobloxClient = {
-    clientId,
-    sessionId: info.sessionId,
-    username: info.username,
-    userId: info.userId,
-    placeId: info.placeId,
-    jobId: info.jobId,
-    placeName: info.placeName,
-    transport: info.transport,
-    ws: info.ws,
-    lastHttpPoll: Date.now(),
-    pendingHttpCommands: [],
-    pendingPollResolve: null,
-  };
-  clientRegistry.set(clientId, entry);
-  if (info.ws) {
-    wsToClientId.set(info.ws, clientId);
-  }
-  console.error(
-    `[Registry] Client registered: ${clientId} (${info.username} @ ${info.placeName}, ${info.transport})`
-  );
-  return clientId;
-}
-
-export function unregisterClient(clientId: string): void {
-  removeClient(clientId, "unregistered");
-}
-
-export function getClientById(clientId: string): RobloxClient | undefined {
-  return clientRegistry.get(clientId);
-}
-
-export function getClientIdByWs(ws: WebSocket): string | undefined {
-  return wsToClientId.get(ws);
+export function setActiveClientId(clientId: string): void {
+  const current = context.getStore();
+  if (current) { current.selection.clientId = clientId; current.clientId = clientId; }
+  else activeClientId = clientId;
 }
 
 export function getActiveClients(): RobloxClient[] {
-  const active: RobloxClient[] = [];
-  for (const entry of clientRegistry.values()) {
-    if (isClientActive(entry)) {
-      active.push(entry);
-    }
-  }
-  return active;
-}
-
-export function formatActiveClientListForTool(selectedClientId = getActiveClientId()): string {
-  const active = getActiveClients();
-  if (active.length === 0) {
-    return "No Roblox clients are currently connected.";
-  }
-
-  // Compact one-line-per-client format to minimize tokens vs pretty JSON.
-  return active
-    .map((c) => {
-      const marker = c.clientId === selectedClientId ? "* " : "  ";
-      return (
-        `${marker}${c.clientId} | ${c.username ?? "?"} @ ${c.placeName ?? c.placeId} ` +
-        `(place=${c.placeId} job=${c.jobId} ${c.transport})`
-      );
-    })
-    .join("\n");
+  const client = runtime.activeClient;
+  return client ? [{ ...client, transport: "relapse" }] : [];
 }
 
 export function resolveTargetClient(clientId?: string): RobloxClient | null {
-  if (clientId) {
-    const entry = findUniqueClientByIdOrPrefix(clientId);
-    if (!entry) return null;
-    if (!isClientActive(entry)) return null;
-    return entry;
-  }
+  const client = getActiveClients()[0];
+  if (!client) return null;
+  if (!clientId || client.clientId === clientId || client.clientId.startsWith(clientId.trim())) return client;
+  return null;
+}
 
-  const active = getActiveClients();
-  if (active.length === 0) return null;
-
-  const wsCl = active.filter((c) => c.transport === "ws");
-  if (wsCl.length > 0) return wsCl[wsCl.length - 1]!;
-  return active.sort((a, b) => b.lastHttpPoll - a.lastHttpPoll)[0]!;
+export function formatActiveClientListForTool(selected = getActiveClientId()): string {
+  const clients = getActiveClients();
+  if (!clients.length) return "No Roblox clients are currently connected.";
+  return clients.map((client) =>
+    `${client.clientId === selected ? "* " : "  "}${client.clientId} | ${client.username} @ ${client.placeName} ` +
+    `(place=${client.placeId} job=${client.jobId} relapse)`
+  ).join("\n");
 }

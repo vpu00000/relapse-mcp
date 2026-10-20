@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withFileTransaction, writeJsonAtomic } from "../shared/atomic-json.js";
 
 export type SemanticProvider = "openai" | "ollama";
 
@@ -16,30 +15,9 @@ export interface SemanticSettings {
   saveEmbeddingsToDisk: boolean;
 }
 
-export interface PublicSemanticSettings {
-  enabled: boolean;
-  provider: SemanticProvider;
-  openaiApiKeySet: boolean;
-  openaiApiKeyMasked: string;
-  openaiBaseUrl: string;
-  openaiModel: string;
-  ollamaBaseUrl: string;
-  ollamaModel: string;
-  saveEmbeddingsToDisk: boolean;
-}
-
-export type SemanticSettingsInput = Partial<{
-  enabled: unknown;
-  provider: unknown;
-  openaiApiKey: unknown;
-  openaiBaseUrl: unknown;
-  openaiModel: unknown;
-  ollamaBaseUrl: unknown;
-  ollamaModel: unknown;
-  saveEmbeddingsToDisk: unknown;
-}>;
-
-export const SEMANTIC_CONFIG_DIR = path.join(os.homedir(), ".roblox-mcp");
+export const SEMANTIC_CONFIG_DIR = path.join(
+  process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "relapse-mcp"
+);
 export const SEMANTIC_SETTINGS_PATH = path.join(SEMANTIC_CONFIG_DIR, "semantic-search.json");
 
 export const DEFAULT_SEMANTIC_SETTINGS: SemanticSettings = {
@@ -52,6 +30,19 @@ export const DEFAULT_SEMANTIC_SETTINGS: SemanticSettings = {
   ollamaModel: "embeddinggemma",
   saveEmbeddingsToDisk: false,
 };
+
+function withEnvironment(settings: SemanticSettings): SemanticSettings {
+  const environment = process.env;
+  return {
+    ...settings,
+    provider: normalizeProvider(environment.RELAPSE_MCP_EMBEDDING_PROVIDER, settings.provider),
+    openaiApiKey: environment.RELAPSE_MCP_OPENAI_API_KEY || environment.OPENAI_API_KEY || settings.openaiApiKey,
+    openaiBaseUrl: normalizeOpenAIBaseUrl(environment.RELAPSE_MCP_OPENAI_BASE_URL, settings.openaiBaseUrl),
+    openaiModel: environment.RELAPSE_MCP_OPENAI_MODEL || settings.openaiModel,
+    ollamaBaseUrl: normalizeOllamaBaseUrl(environment.RELAPSE_MCP_OLLAMA_BASE_URL, settings.ollamaBaseUrl),
+    ollamaModel: environment.RELAPSE_MCP_OLLAMA_MODEL || settings.ollamaModel,
+  };
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -100,9 +91,9 @@ export async function loadSemanticSettings(): Promise<SemanticSettings> {
   try {
     const raw = await fs.readFile(SEMANTIC_SETTINGS_PATH, "utf8");
     const parsed: unknown = JSON.parse(raw);
-    if (!isObject(parsed)) return { ...DEFAULT_SEMANTIC_SETTINGS };
+    if (!isObject(parsed)) return withEnvironment({ ...DEFAULT_SEMANTIC_SETTINGS });
 
-    return {
+    return withEnvironment({
       enabled:
         typeof parsed.enabled === "boolean"
           ? parsed.enabled
@@ -123,49 +114,12 @@ export async function loadSemanticSettings(): Promise<SemanticSettings> {
         typeof parsed.saveEmbeddingsToDisk === "boolean"
           ? parsed.saveEmbeddingsToDisk
           : DEFAULT_SEMANTIC_SETTINGS.saveEmbeddingsToDisk,
-    };
+    });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return { ...DEFAULT_SEMANTIC_SETTINGS };
+    if (code === "ENOENT") return withEnvironment({ ...DEFAULT_SEMANTIC_SETTINGS });
     throw error;
   }
-}
-
-export async function saveSemanticSettings(input: SemanticSettingsInput): Promise<SemanticSettings> {
-  return withFileTransaction(SEMANTIC_SETTINGS_PATH, async () => {
-    const existing = await loadSemanticSettings();
-    const next: SemanticSettings = {
-      enabled: typeof input.enabled === "boolean" ? input.enabled : existing.enabled,
-      provider: normalizeProvider(input.provider, existing.provider),
-      openaiApiKey:
-        typeof input.openaiApiKey === "string" ? input.openaiApiKey.trim() : existing.openaiApiKey,
-      openaiBaseUrl: normalizeOpenAIBaseUrl(input.openaiBaseUrl, existing.openaiBaseUrl),
-      openaiModel: normalizeString(input.openaiModel, existing.openaiModel),
-      ollamaBaseUrl: normalizeOllamaBaseUrl(input.ollamaBaseUrl, existing.ollamaBaseUrl),
-      ollamaModel: normalizeString(input.ollamaModel, existing.ollamaModel),
-      saveEmbeddingsToDisk:
-        typeof input.saveEmbeddingsToDisk === "boolean"
-          ? input.saveEmbeddingsToDisk
-          : existing.saveEmbeddingsToDisk,
-    };
-    await writeJsonAtomic(SEMANTIC_SETTINGS_PATH, next);
-    return next;
-  });
-}
-
-export function toPublicSemanticSettings(settings: SemanticSettings): PublicSemanticSettings {
-  const key = settings.openaiApiKey;
-  return {
-    enabled: settings.enabled,
-    provider: settings.provider,
-    openaiApiKeySet: key.length > 0,
-    openaiApiKeyMasked: key ? `${key.slice(0, 3)}...${key.slice(-4)}` : "",
-    openaiBaseUrl: settings.openaiBaseUrl,
-    openaiModel: settings.openaiModel,
-    ollamaBaseUrl: settings.ollamaBaseUrl,
-    ollamaModel: settings.ollamaModel,
-    saveEmbeddingsToDisk: settings.saveEmbeddingsToDisk,
-  };
 }
 
 export function validateSemanticSettings(settings: SemanticSettings): string | null {
