@@ -9,6 +9,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { FramedSocket } from "../dist/relapse/framed-socket.js";
 
+const packagePath = process.env.RELAPSE_MCP_TEST_PACKAGE;
+
 function frame(value) {
   const body = Buffer.from(JSON.stringify(value));
   const header = Buffer.alloc(4);
@@ -25,7 +27,7 @@ async function until(predicate, timeout = 5000) {
   }
 }
 
-test("stdio MCP shares @main and reinjects its channel after a session change", { timeout: 15_000 }, async () => {
+test("stdio MCP shares @main and reinjects its channel after a session change", { timeout: packagePath ? 60_000 : 15_000 }, async () => {
   const connector = fs.readFileSync(path.resolve("dist/connector.luau"), "utf8");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relapse-mcp-test-"));
   const socketPath = path.join(dir, "relapse.sock");
@@ -96,8 +98,16 @@ test("stdio MCP shares @main and reinjects its channel after a session change", 
   otherClient.on("message", () => {});
   await otherClient.connect();
 
-  const transport = new StdioClientTransport({ command: process.execPath,
-    args: [path.resolve("dist/index.js")], env: { ...process.env, RELAPSE_SOCKET_PATH: socketPath } });
+  const transport = new StdioClientTransport({
+    command: packagePath ? "npx" : process.execPath,
+    args: packagePath ? ["-y", `--package=${path.resolve(packagePath)}`, "relapse-mcp"] : [path.resolve("dist/index.js")],
+    cwd: dir,
+    env: {
+      ...process.env,
+      RELAPSE_SOCKET_PATH: socketPath,
+      ...(packagePath ? { npm_config_cache: path.join(dir, "npm-cache") } : {}),
+    },
+  });
   const client = new Client({ name: "test", version: "1" });
   try {
     await client.connect(transport);
